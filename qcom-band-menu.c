@@ -1,5 +1,5 @@
 /*
- * qcom-bandlock-v2.c
+ * qcom-band-menu-v3.c
  * Interactive Qualcomm QMI NAS forcing UI for rooted ARM64 Android.
  *
  * Based on qcom-band-menu-v2-mode-debug.c, extended with independent NR-SA
@@ -10,7 +10,7 @@
  *                 Can also be toggled at runtime, see the "verbose" command.
  *
  * Usage:
- *   qcom-bandlock-v2 [-verbose]
+ *   qcom-band-menu-v3 [-verbose]
  *
  * Commands:
  *   sim 1 | sim 2
@@ -89,7 +89,7 @@
  * Build:
  * clang --target=aarch64-linux-gnu -fuse-ld=lld -O2 -nostdlib -static \
  *   -fno-stack-protector -fno-builtin -Wl,-e,_start \
- *   -Wl,--build-id=none -o qcom-bandlock-v2 qcom-bandlock-v2.c
+ *   -Wl,--build-id=none -o qcom-bandlock-v2 qcom-band-menu-v3.c
  */
 
 typedef unsigned char u8;
@@ -130,7 +130,7 @@ struct sockaddr_qrtr{u16 family,pad;u32 node,port;};
 struct qrtr_ctrl_pkt{u32 command,service,instance,node,port;};
 struct timeval64{s64 sec,usec;};
 struct timespec64{s64 sec,nsec;};
-struct state{s64 fd;u32 node,port;int sim;u16 rat;u8 legacy[8],lte[8],extlte[32],sa[64],nsa[64];int valid;u8 hw_legacy[8],hw_lte[32],hw_nr[64];int hw_valid;int nr_mode[2],nr_mode_known[2];char status[160];int verbose;};
+struct state{s64 fd;u32 node,port;int sim;u16 rat;u8 legacy[8],lte[8],extlte[32],sa[64],nsa[64];int valid;u8 hw_legacy[8],hw_lte[32],hw_nr[64];int hw_valid;int nr_mode[2],nr_mode_known[2];char status[160];int verbose;int show_hardware;};
 
 static inline s64 sc1(s64 n,s64 a){register s64 x8 __asm__("x8")=n;register s64 x0 __asm__("x0")=a;__asm__ volatile("svc 0":"+r"(x0):"r"(x8):"memory");return x0;}
 static inline s64 sc2(s64 n,s64 a,s64 b){register s64 x8 __asm__("x8")=n;register s64 x0 __asm__("x0")=a;register s64 x1 __asm__("x1")=b;__asm__ volatile("svc 0":"+r"(x0):"r"(x1),"r"(x8):"memory");return x0;}
@@ -303,6 +303,7 @@ static void pmask(const u8*m,u32 max,const char*pre);
 static void pgsm(const u8*p);
 static void pwcdma(const u8*p);
 static int wbit(u32 b);
+static void set64(u8*p,u64 v);
 static int dms_exchange(u32 node,u32 port,u8*rsp,u32 cap,u32*rn){
  struct sockaddr_qrtr a;struct timeval64 tv={3,0};u8 req[7];s64 fd,n;u16 t=txid();int skipped=0;
  fd=sc3(SYS_socket,AF_QIPCRTR,SOCK_DGRAM,0);if(fd<0)return 0;
@@ -379,7 +380,7 @@ static void prat(u16 m){int f=1;if(m==0xFF){out("AUTO\n");return;}
  PR(4,"GSM");PR(8,"WCDMA");PR(16,"LTE");PR(64,"NR");
 #undef PR
  if(f)out("none/unknown");out("\n");}
-static void pnrmode(struct state*s){int i=s->sim-1;if(i<0||i>1||!s->nr_mode_known[i]){out("unknown\n");return;}if(s->nr_mode[i]==0)out("BOTH\n");else if(s->nr_mode[i]==1)out("NSA\n");else if(s->nr_mode[i]==2)out("SA\n");else out("unknown\n");}
+static void pnrmode(struct state*s){int i=s->sim-1;if(i<0||i>1||!s->nr_mode_known[i]){out("unknown\n");return;}if(s->nr_mode[i]==0)out("SA/NSA\n");else if(s->nr_mode[i]==1)out("NSA\n");else if(s->nr_mode[i]==2)out("SA\n");else out("unknown\n");}
 
 static void draw_state(struct state*s){
  out("\n===============================\nCURRENT BANDS (SIM ");outnum((u32)s->sim);out(")\n");
@@ -394,16 +395,30 @@ static void draw_state(struct state*s){
  }else{
   out("RAT: unavailable\nGSM: unavailable\nWCDMA: unavailable\nLTE: unavailable\nNR-NSA: unavailable\nNR-SA: unavailable\nNR MODE: unavailable\n");
  }
+ if(s->show_hardware){
+  out("\nHARDWARE SUPPORTED BANDS\n");
+  if(s->hw_valid){
+   out("GSM: ");pgsm(s->hw_legacy);
+   out("WCDMA: ");pwcdma(s->hw_legacy);
+   out("LTE: ");pmask(s->hw_lte,256,"B");
+   out("NR-NSA: ");pmask(s->hw_nr,512,"n");
+   out("NR-SA: ");pmask(s->hw_nr,512,"n");
+  }else out("unavailable\n");
+ }
  out("Apply settings for: SIM");outnum((u32)s->sim);out("\n");
  if(s->status[0]&&!eq(s->status,"Ready.")){out("Message: ");out(s->status);out("\n");}
  out("===============================\nInput: ");
+ /* The hardware section is intentionally one-shot. The `hardware` command
+    enables it for the next redraw only; clearing the flag here prevents it
+    from appearing after every later command. */
+ s->show_hardware=0;
 }
 
 static void draw_initial(struct state*s){
- out("===============================\n Qualcomm QMI Bandlock V2\n===============================\n");
- out("USAGE EXAMPLES\nsim 1\nsim 2\nrat auto\nrat gsm,wcdma,lte,nr\nlte 1,2,3,4,5\nnr 1,2,3,4,5\nsa 1,2,3,4,5\nnsa 1,2,3,4,5\nmode sa\nmode nsa\nmode both\nwcdma 1,5,8,19\ngsm 850,900,1800,1900\nverbose on\nverbose off\nrefresh\nexit\n");
+ out("===============================\n Qualcomm QMI Bandlock V3\n===============================\n");
+ out("USAGE EXAMPLES\nsim 1\nsim 2\nrat auto\nrat gsm,wcdma,lte,nr\nlte 1,2,3,4,5\nlte all\nnr 1,2,3,4,5\nsa 1,2,3,4,5\nnsa 1,2,3,4,5\nmode sa\nmode nsa\nmode both\nwcdma 1,5,8,19\ngsm 850,900,1800,1900\nlte all nr 1,2,38 rat lte,nr\nverbose on\nverbose off\nrefresh\nhardware\nreset\nexit\n");
  if(s->verbose)out("Verbose mode is ON (started with -verbose): every command prints the raw TX/RX\nbytes and decoded TLVs. Use 'verbose off' to quiet it.\n");
- else out("Verbose mode is OFF (default). Use 'verbose on', or relaunch with -verbose, to see\nraw TX/RX bytes and decoded TLVs for every command -- useful when one is rejected.\n");
+ else out("Verbose mode is OFF (default). Use 'verbose on', or relaunch with -verbose\n");
  draw_state(s);
 }
 /* Read a complete command line. ADB shell on Windows may deliver stdin one
@@ -437,8 +452,49 @@ static s64 readline(char*b,u64 cap){
 }
 
 static int cmd_rat(struct state*s,char*a){u8 p[16],d=1,m[2];int pos=0;u16 mask=0;if(eq(a,"auto"))mask=0xFF;else{char*x=a,*z;while(*x){while(*x&&sep(*x))x++;if(!*x)break;z=x;while(*x&&!sep(*x))x++;if(*x)*x++=0;if(eq(z,"gsm"))mask|=4;else if(eq(z,"wcdma")||eq(z,"umts"))mask|=8;else if(eq(z,"lte"))mask|=16;else if(eq(z,"nr")||eq(z,"nr5g"))mask|=64;else{setstatus(s,"Invalid RAT token.");return 0;}}if(!mask)return 0;}m[0]=(u8)mask;m[1]=(u8)(mask>>8);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_MODE,m,2);return setter(s,p,(u16)pos);}
+static int cmd_lte_hardware(struct state*s){
+ u8 l[8],p[48],d=1;int pos=0,i,has_high=0,any=0;
+ if(!s->hw_valid&&!query_hardware(s))return 0;
+ for(i=0;i<32;i++)if(s->hw_lte[i]){any=1;if(i>=8)has_high=1;}
+ if(!any){setstatus(s,"No hardware-supported LTE bands were reported.");return 0;}
+ copy(l,s->hw_lte,8);
+ pos=addtlv(p,pos,TLV_DURATION,&d,1);
+ if(has_high)pos=addtlv(p,pos,TLV_EXT_LTE_SET,s->hw_lte,32);
+ else pos=addtlv(p,pos,TLV_LTE,l,8);
+ return setter(s,p,(u16)pos);
+}
+static int cmd_nr_hardware(struct state*s,u8 id){
+ u8 p[80],d=1;int pos=0,i,any=0;
+ if(!s->hw_valid&&!query_hardware(s))return 0;
+ for(i=0;i<64;i++)if(s->hw_nr[i]){any=1;break;}
+ if(!any){setstatus(s,"No hardware-supported NR bands were reported.");return 0;}
+ pos=addtlv(p,pos,TLV_DURATION,&d,1);
+ pos=addtlv(p,pos,id,s->hw_nr,64);
+ return setter(s,p,(u16)pos);
+}
+static int cmd_gsm_hardware(struct state*s){
+ u64 m,hm;u8 x[8],p[20],d=1;int pos=0;
+ if(!s->valid)return 0;
+ if(!s->hw_valid&&!query_hardware(s))return 0;
+ hm=le64(s->hw_legacy);
+ m=le64(s->legacy)&~((1ULL<<7)|(1ULL<<8)|(1ULL<<9)|(1ULL<<19)|(1ULL<<21));
+ m|=hm&((1ULL<<7)|(1ULL<<8)|(1ULL<<9)|(1ULL<<19)|(1ULL<<21));
+ set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);
+ return setter(s,p,(u16)pos);
+}
+static int cmd_wcdma_hardware(struct state*s){
+ u64 m,hm,wm=0;u8 x[8],p[20],d=1;int pos=0,b,i;
+ if(!s->valid)return 0;
+ if(!s->hw_valid&&!query_hardware(s))return 0;
+ for(i=1;i<=19;i++){b=wbit((u32)i);wm|=1ULL<<b;}
+ hm=le64(s->hw_legacy);m=(le64(s->legacy)&~wm)|(hm&wm);
+ set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);
+ return setter(s,p,(u16)pos);
+}
+
 static int cmd_lte(struct state*s,char*a){
  u32 v[128];int c,i,pos=0,bad=0,has_high=0;u8 l[8],e[32],p[64],d=1;
+ if(eq(a,"hardware")||eq(a,"all"))return cmd_lte_hardware(s);
  c=plist(a,v,128,1,256);
  if(c<=0){setstatus(s,"Invalid LTE list.");return 0;}
  if(!s->hw_valid&&!query_hardware(s))return 0;
@@ -461,11 +517,51 @@ static int cmd_lte(struct state*s,char*a){
  else pos=addtlv(p,pos,TLV_LTE,l,8);
  return setter(s,p,(u16)pos);
 }
-static int cmd_nr(struct state*s,char*a,u8 id){u32 v[128];int c,i,pos=0,bad=0;u8 m[64],p[80],d=1;c=plist(a,v,128,1,512);if(c<=0){setstatus(s,"Invalid NR list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!mhas(s->hw_nr,v[i]))bad=1;if(bad){print_rejected("NR",v,c,s->hw_nr,512,"n");setstatus(s,"NR command not sent.");return 0;}zero(m,64);for(i=0;i<c;i++)mset(m,v[i]);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,id,m,64);return setter(s,p,(u16)pos);}
+static int cmd_nr(struct state*s,char*a,u8 id){u32 v[128];int c,i,pos=0,bad=0;u8 m[64],p[80],d=1;if(eq(a,"hardware")||eq(a,"all"))return cmd_nr_hardware(s,id);c=plist(a,v,128,1,512);if(c<=0){setstatus(s,"Invalid NR list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!mhas(s->hw_nr,v[i]))bad=1;if(bad){print_rejected("NR",v,c,s->hw_nr,512,"n");setstatus(s,"NR command not sent.");return 0;}zero(m,64);for(i=0;i<c;i++)mset(m,v[i]);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,id,m,64);return setter(s,p,(u16)pos);}
 static void set64(u8*p,u64 v){int i;for(i=0;i<8;i++)p[i]=(u8)(v>>(8*i));}
-static int cmd_gsm(struct state*s,char*a){u32 v[16];int c,i,pos=0,bad=0;u64 m;u8 x[8],p[20],d=1;if(!s->valid)return 0;c=plist(a,v,16,1,2000);if(c<=0){setstatus(s,"Invalid GSM list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!hw_gsm_has(s,v[i]))bad=1;if(bad){out("Unsupported GSM band(s): ");{int f=1;for(i=0;i<c;i++)if(!hw_gsm_has(s,v[i])){if(!f)out(",");outnum(v[i]);f=0;}}out("\nSupported GSM bands: ");pgsm(s->hw_legacy);setstatus(s,"GSM command not sent.");return 0;}m=le64(s->legacy)&~((1ULL<<7)|(1ULL<<8)|(1ULL<<9)|(1ULL<<19)|(1ULL<<21));for(i=0;i<c;i++){if(v[i]==850)m|=1ULL<<19;else if(v[i]==900)m|=(1ULL<<8)|(1ULL<<9);else if(v[i]==1800)m|=1ULL<<7;else if(v[i]==1900)m|=1ULL<<21;}set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}
+static int cmd_gsm(struct state*s,char*a){u32 v[16];int c,i,pos=0,bad=0;u64 m;u8 x[8],p[20],d=1;if(eq(a,"hardware")||eq(a,"all"))return cmd_gsm_hardware(s);if(!s->valid)return 0;c=plist(a,v,16,1,2000);if(c<=0){setstatus(s,"Invalid GSM list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!hw_gsm_has(s,v[i]))bad=1;if(bad){out("Unsupported GSM band(s): ");{int f=1;for(i=0;i<c;i++)if(!hw_gsm_has(s,v[i])){if(!f)out(",");outnum(v[i]);f=0;}}out("\nSupported GSM bands: ");pgsm(s->hw_legacy);setstatus(s,"GSM command not sent.");return 0;}m=le64(s->legacy)&~((1ULL<<7)|(1ULL<<8)|(1ULL<<9)|(1ULL<<19)|(1ULL<<21));for(i=0;i<c;i++){if(v[i]==850)m|=1ULL<<19;else if(v[i]==900)m|=(1ULL<<8)|(1ULL<<9);else if(v[i]==1800)m|=1ULL<<7;else if(v[i]==1900)m|=1ULL<<21;}set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}
 static int wbit(u32 b){switch(b){case 1:return 22;case 2:return 23;case 3:return 24;case 4:return 25;case 5:return 26;case 6:return 27;case 7:return 48;case 8:return 49;case 9:return 50;case 10:return 51;case 11:return 52;case 12:return 53;case 13:return 54;case 14:return 55;case 15:return 56;case 16:return 57;case 17:return 58;case 18:return 59;case 19:return 60;default:return -1;}}
-static int cmd_wcdma(struct state*s,char*a){u32 v[32];int c,i,b,pos=0,bad=0;u64 m,clr=0;u8 x[8],p[20],d=1;if(!s->valid)return 0;c=plist(a,v,32,1,19);if(c<=0){setstatus(s,"Invalid WCDMA list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!hw_wcdma_has(s,v[i]))bad=1;if(bad){out("Unsupported WCDMA band(s): ");{int f=1;for(i=0;i<c;i++)if(!hw_wcdma_has(s,v[i])){if(!f)out(",");out("B");outnum(v[i]);f=0;}}out("\nSupported WCDMA bands: ");pwcdma(s->hw_legacy);setstatus(s,"WCDMA command not sent.");return 0;}for(i=1;i<=19;i++){b=wbit((u32)i);clr|=1ULL<<b;}m=le64(s->legacy)&~clr;for(i=0;i<c;i++){b=wbit(v[i]);m|=1ULL<<b;}set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}
+static int cmd_wcdma(struct state*s,char*a){u32 v[32];int c,i,b,pos=0,bad=0;u64 m,clr=0;u8 x[8],p[20],d=1;if(eq(a,"hardware")||eq(a,"all"))return cmd_wcdma_hardware(s);if(!s->valid)return 0;c=plist(a,v,32,1,19);if(c<=0){setstatus(s,"Invalid WCDMA list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!hw_wcdma_has(s,v[i]))bad=1;if(bad){out("Unsupported WCDMA band(s): ");{int f=1;for(i=0;i<c;i++)if(!hw_wcdma_has(s,v[i])){if(!f)out(",");out("B");outnum(v[i]);f=0;}}out("\nSupported WCDMA bands: ");pwcdma(s->hw_legacy);setstatus(s,"WCDMA command not sent.");return 0;}for(i=1;i<=19;i++){b=wbit((u32)i);clr|=1ULL<<b;}m=le64(s->legacy)&~clr;for(i=0;i<c;i++){b=wbit(v[i]);m|=1ULL<<b;}set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}
+
+
+/* Restore every band family to the modem-reported hardware capability for
+ * the currently bound SIM. GSM and WCDMA share TLV 0x12, so they must be
+ * restored together in one legacy-mask write; issuing the two old helpers
+ * back-to-back would let the second write rebuild from stale cached state
+ * and accidentally undo the first. LTE and the three NR domains remain
+ * independent SET transactions, matching the proven incremental setters. */
+static int cmd_reset(struct state*s){
+ u8 legacy[8],p[80],d=1;int pos,i,has_lte_high=0,any_lte=0,any_nr=0;
+ if(!s->hw_valid&&!query_hardware(s))return 0;
+
+ /* GSM + WCDMA: the DMS legacy capability mask already contains both. */
+ copy(legacy,s->hw_legacy,8);
+ pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,legacy,8);
+ if(!setter(s,p,(u16)pos))return 0;
+
+ /* LTE: use legacy 0x15 only when every supported band fits B1-B64;
+    otherwise use the extended 0x24 bitmap alone. */
+ for(i=0;i<32;i++)if(s->hw_lte[i]){any_lte=1;if(i>=8)has_lte_high=1;}
+ if(!any_lte){setstatus(s,"Reset failed: no hardware LTE bands reported.");return 0;}
+ pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);
+ if(has_lte_high)pos=addtlv(p,pos,TLV_EXT_LTE_SET,s->hw_lte,32);
+ else pos=addtlv(p,pos,TLV_LTE,s->hw_lte,8);
+ if(!setter(s,p,(u16)pos))return 0;
+
+ for(i=0;i<64;i++)if(s->hw_nr[i]){any_nr=1;break;}
+ if(!any_nr){setstatus(s,"Reset failed: no hardware NR bands reported.");return 0;}
+
+ /* Restore combined NR, independent SA, and independent NSA masks. */
+ pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_COMBINED,s->hw_nr,64);
+ if(!setter(s,p,(u16)pos))return 0;
+ pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_SA_SET,s->hw_nr,64);
+ if(!setter(s,p,(u16)pos))return 0;
+ pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_NSA_SET,s->hw_nr,64);
+ if(!setter(s,p,(u16)pos))return 0;
+
+ setstatus(s,"All band masks restored to hardware-supported bands.");
+ return 1;
+}
 
 
 /* Proven mode-only setter from the original menu. Deliberately sends no LTE
@@ -491,21 +587,38 @@ static int reopen_bound(struct state*s,int sim){
  return 1;
 }
 
-static int process(struct state*s,char*l){
- char*a;
+static int wordeq(const char*s,u32 n,const char*w){u32 i=0;while(w[i]&&i<n&&s[i]==w[i])i++;return i==n&&w[i]==0;}
+static int command_word(const char*s,u32 n){
+ return wordeq(s,n,"sim")||wordeq(s,n,"rat")||wordeq(s,n,"lte")||
+        wordeq(s,n,"nr")||wordeq(s,n,"nsa")||wordeq(s,n,"sa")||
+        wordeq(s,n,"mode")||wordeq(s,n,"gsm")||wordeq(s,n,"wcdma")||
+        wordeq(s,n,"verbose")||wordeq(s,n,"refresh")||
+        wordeq(s,n,"hardware")||wordeq(s,n,"reset")||wordeq(s,n,"exit");
+}
+static int command_needs_arg(const char*s,u32 n){
+ return !(wordeq(s,n,"refresh")||wordeq(s,n,"hardware")||wordeq(s,n,"reset")||wordeq(s,n,"exit"));
+}
+
+/* Execute exactly one already-separated command.
+ * Return: -1 exit, 0 failure, 1 success/no delayed GET needed,
+ *         2 successful modem SET (caller performs one shared delay+GET). */
+static int process_one(struct state*s,char*l){
+ char*a;int ok;
  if(eq(l,"exit"))return -1;
- if(eq(l,"hardware")){if(query_hardware(s)){print_hardware(s);setstatus(s,"Hardware bands listed.");}return 1;}
+ if(eq(l,"hardware")){s->show_hardware=1;if(!query_hardware(s))return 0;setstatus(s,"Ready.");return 1;}
+ if(eq(l,"reset"))return cmd_reset(s)?2:0;
  if(starts(l,"verbose ")){
   a=l+8;
   if(eq(a,"on")){s->verbose=1;setstatus(s,"Verbose mode on: full TX/RX bytes and decoded TLVs will print for every set command.");}
   else if(eq(a,"off")){s->verbose=0;setstatus(s,"Verbose mode off.");}
-  else setstatus(s,"Use verbose on or verbose off.");
+  else{setstatus(s,"Use verbose on or verbose off.");return 0;}
   return 1;
  }
  if(eq(l,"refresh")){
   int sim=s->sim;
-  if(!reopen_bound(s,sim)){s->valid=0;return 1;}
-  if(query(s))setstatus(s,"State refreshed.");
+  if(!reopen_bound(s,sim)){s->valid=0;return 0;}
+  if(!query(s))return 0;
+  setstatus(s,"State refreshed.");
   return 1;
  }
  if(starts(l,"sim ")){
@@ -514,31 +627,74 @@ static int process(struct state*s,char*l){
    int sim=a[0]-'0';
    if(reopen_bound(s,sim)){
     if(query(s))setstatus(s,sim==1?"Now applying settings to SIM1.":"Now applying settings to SIM2.");
-   }else s->valid=0;
-  }else setstatus(s,"Use sim 1 or sim 2.");
+    else return 0;
+   }else{s->valid=0;return 0;}
+  }else{setstatus(s,"Use sim 1 or sim 2.");return 0;}
   return 1;
  }
- if(starts(l,"rat "))cmd_rat(s,l+4);
- else if(starts(l,"lte "))cmd_lte(s,l+4);
- else if(starts(l,"nr "))cmd_nr(s,l+3,TLV_NR_COMBINED);
- else if(starts(l,"nsa "))cmd_nr(s,l+4,TLV_NR_NSA_SET);
- else if(starts(l,"sa "))cmd_nr(s,l+3,TLV_NR_SA_SET);
- else if(starts(l,"mode "))cmd_mode(s,l+5);
- else if(starts(l,"gsm "))cmd_gsm(s,l+4);
- else if(starts(l,"wcdma "))cmd_wcdma(s,l+6);
- else{setstatus(s,"Unknown command.");return 1;}
- /* Give the modem a moment to actually apply the SET before reading state
-    back -- an immediate GET can still race the change and return stale
-    values, which is why a manual "refresh" a moment later used to look
-    correct when this automatic query did not. */
- sleep_ms(1000);
- query(s);return 1;
+ if(starts(l,"rat "))ok=cmd_rat(s,l+4);
+ else if(starts(l,"lte "))ok=cmd_lte(s,l+4);
+ else if(starts(l,"nr "))ok=cmd_nr(s,l+3,TLV_NR_COMBINED);
+ else if(starts(l,"nsa "))ok=cmd_nr(s,l+4,TLV_NR_NSA_SET);
+ else if(starts(l,"sa "))ok=cmd_nr(s,l+3,TLV_NR_SA_SET);
+ else if(starts(l,"mode "))ok=cmd_mode(s,l+5);
+ else if(starts(l,"gsm "))ok=cmd_gsm(s,l+4);
+ else if(starts(l,"wcdma "))ok=cmd_wcdma(s,l+6);
+ else{setstatus(s,"Unknown command.");return 0;}
+ return ok?2:0;
+}
+
+/* Supports both:
+ *   lte all nr 1,2,38 rat lte,nr
+ *   lte all; nr 1,2,38; rat lte,nr
+ *
+ * A command argument ends at ';' or immediately before the next recognized
+ * command keyword. This still permits spaced lists such as "lte 1, 3, 7"
+ * because numeric tokens are not command keywords. All modem SETs execute in
+ * order, followed by one shared one-second delay and one final state query. */
+static int process(struct state*s,char*l){
+ u32 pos=0,len=(u32)slen(l);int did_set=0;
+ while(pos<len){
+  u32 cs,ce,as,ae,i,j;char one[512];int r;
+  while(pos<len&&(l[pos]==' '||l[pos]=='\t'||l[pos]==';'))pos++;
+  if(pos>=len)break;
+  cs=pos;while(pos<len&&l[pos]!=' '&&l[pos]!='\t'&&l[pos]!=';')pos++;ce=pos;
+  if(!command_word(l+cs,ce-cs)){setstatus(s,"Unknown command in chain.");return 1;}
+  if(!command_needs_arg(l+cs,ce-cs)){
+   i=0;for(j=cs;j<ce&&i+1<sizeof(one);j++)one[i++]=l[j];one[i]=0;
+  }else{
+   while(pos<len&&(l[pos]==' '||l[pos]=='\t'))pos++;
+   if(pos>=len||l[pos]==';'){setstatus(s,"Missing command argument.");return 1;}
+   as=pos;ae=len;
+   for(i=pos;i<len;i++){
+    if(l[i]==';'){ae=i;break;}
+    if(l[i]==' '||l[i]=='\t'){
+     u32 k=i;while(k<len&&(l[k]==' '||l[k]=='\t'))k++;
+     if(k<len&&l[k]!=';'){
+      u32 we=k;while(we<len&&l[we]!=' '&&l[we]!='\t'&&l[we]!=';')we++;
+      if(command_word(l+k,we-k)){ae=i;break;}
+     }
+    }
+   }
+   while(ae>as&&(l[ae-1]==' '||l[ae-1]=='\t'))ae--;
+   i=0;for(j=cs;j<ce&&i+1<sizeof(one);j++)one[i++]=l[j];
+   if(i+1<sizeof(one))one[i++]=' ';
+   for(j=as;j<ae&&i+1<sizeof(one);j++)one[i++]=l[j];one[i]=0;
+   pos=ae;
+  }
+  r=process_one(s,one);
+  if(r<0)return -1;
+  if(r==0)return 1; /* stop the chain on the first failed command */
+  if(r==2)did_set=1;
+ }
+ if(did_set){sleep_ms(1000);query(s);}
+ return 1;
 }
 
 static int run(int argc,char**argv){
  struct state s;char line[512];int i,verbose_flag=0;
  for(i=1;i<argc;i++)if(eq(argv[i],"-verbose"))verbose_flag=1;
- zero(&s,sizeof(s));s.fd=-1;s.sim=1;s.verbose=verbose_flag;setstatus(&s,"Starting...");if(!open_nas(&s)){draw_initial(&s);return 2;}if(!bind_sim(&s,1)){draw_initial(&s);sc1(SYS_close,s.fd);return 3;}query(&s);setstatus(&s,"Ready.");draw_initial(&s);for(;;){if(readline(line,sizeof(line))<0)break;if(!line[0]){out("Input: ");continue;}if(process(&s,line)<0)break;draw_state(&s);}out("\nQualcomm QMI Bandlock V2 closed.\n");if(s.fd>=0)sc1(SYS_close,s.fd);return 0;
+ zero(&s,sizeof(s));s.fd=-1;s.sim=1;s.verbose=verbose_flag;setstatus(&s,"Starting...");if(!open_nas(&s)){draw_initial(&s);return 2;}if(!bind_sim(&s,1)){draw_initial(&s);sc1(SYS_close,s.fd);return 3;}query(&s);(void)query_hardware(&s);setstatus(&s,"Ready.");draw_initial(&s);for(;;){if(readline(line,sizeof(line))<0)break;if(!line[0]){out("Input: ");continue;}if(process(&s,line)<0)break;draw_state(&s);}out("\nQualcomm QMI Bandlock V3 closed.\n");if(s.fd>=0)sc1(SYS_close,s.fd);return 0;
 }
 void c_start(u64*stack){int rc;int argc=(int)stack[0];char**argv=(char**)&stack[1];rc=run(argc,argv);sc1(SYS_exit,rc);for(;;){}}
 __asm__(".global _start\n.type _start,%function\n_start:\nmov x0,sp\nbl c_start\nb .\n");
