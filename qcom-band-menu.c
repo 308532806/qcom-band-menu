@@ -1,5 +1,5 @@
 /*
- * qcom-band-menu-v3.c
+ * qcom-band-menu-v3.2.c
  * Interactive Qualcomm QMI NAS forcing UI for rooted ARM64 Android.
  *
  * Based on qcom-band-menu-v2-mode-debug.c, extended with independent NR-SA
@@ -10,7 +10,7 @@
  *                 Can also be toggled at runtime, see the "verbose" command.
  *
  * Usage:
- *   qcom-band-menu-v3 [-verbose]
+ *   qcom-band-menu-v3.2 [-verbose]
  *
  * Commands:
  *   sim 1 | sim 2
@@ -89,7 +89,7 @@
  * Build:
  * clang --target=aarch64-linux-gnu -fuse-ld=lld -O2 -nostdlib -static \
  *   -fno-stack-protector -fno-builtin -Wl,-e,_start \
- *   -Wl,--build-id=none -o qcom-bandlock-v2 qcom-band-menu-v3.c
+ *   -Wl,--build-id=none -o qcom-band-menu-v3.2 qcom-band-menu-v3.2.c
  */
 
 typedef unsigned char u8;
@@ -302,6 +302,8 @@ static int mhas(const u8*m,u32 b);
 static void pmask(const u8*m,u32 max,const char*pre);
 static void pgsm(const u8*p);
 static void pwcdma(const u8*p);
+static void pgsm_effective(const struct state*s);
+static void pwcdma_effective(const struct state*s);
 static int wbit(u32 b);
 static void set64(u8*p,u64 v);
 static int dms_exchange(u32 node,u32 port,u8*rsp,u32 cap,u32*rn){
@@ -375,6 +377,18 @@ static void pwcdma(const u8*p){u64 m=le64(p);int f=1;
  PW(22,1);PW(23,2);PW(24,3);PW(25,4);PW(26,5);PW(27,6);PW(48,7);PW(49,8);PW(50,9);PW(51,10);PW(52,11);PW(53,12);PW(54,13);PW(55,14);PW(56,15);PW(57,16);PW(58,17);PW(59,18);PW(60,19);
 #undef PW
  if(f)out("none");out("\n");}
+static void pgsm_effective(const struct state*s){
+ u8 x[8];int i;
+ if(!s->hw_valid){pgsm(s->legacy);return;}
+ for(i=0;i<8;i++)x[i]=(u8)(s->legacy[i]&s->hw_legacy[i]);
+ pgsm(x);
+}
+static void pwcdma_effective(const struct state*s){
+ u8 x[8];int i;
+ if(!s->hw_valid){pwcdma(s->legacy);return;}
+ for(i=0;i<8;i++)x[i]=(u8)(s->legacy[i]&s->hw_legacy[i]);
+ pwcdma(x);
+}
 static void prat(u16 m){int f=1;if(m==0xFF){out("AUTO\n");return;}
 #define PR(bit,n) do{if(m&(bit)){if(!f)out(",");out(n);f=0;}}while(0)
  PR(4,"GSM");PR(8,"WCDMA");PR(16,"LTE");PR(64,"NR");
@@ -386,8 +400,8 @@ static void draw_state(struct state*s){
  out("\n===============================\nCURRENT BANDS (SIM ");outnum((u32)s->sim);out(")\n");
  if(s->valid){
   out("RAT: ");prat(s->rat);
-  out("GSM: ");pgsm(s->legacy);
-  out("WCDMA: ");pwcdma(s->legacy);
+  out("GSM: ");pgsm_effective(s);
+  out("WCDMA: ");pwcdma_effective(s);
   out("LTE: ");pmask(s->extlte,256,"B");
   out("NR-NSA: ");pmask(s->nsa,512,"n");
   out("NR-SA: ");pmask(s->sa,512,"n");
@@ -415,8 +429,8 @@ static void draw_state(struct state*s){
 }
 
 static void draw_initial(struct state*s){
- out("===============================\n Qualcomm QMI Bandlock V3\n===============================\n");
- out("USAGE EXAMPLES\nsim 1\nsim 2\nrat auto\nrat gsm,wcdma,lte,nr\nlte 1,2,3,4,5\nlte all\nnr 1,2,3,4,5\nsa 1,2,3,4,5\nnsa 1,2,3,4,5\nmode sa\nmode nsa\nmode both\nwcdma 1,5,8,19\ngsm 850,900,1800,1900\nlte all nr 1,2,38 rat lte,nr\nverbose on\nverbose off\nrefresh\nhardware\nreset\nexit\n");
+ out("===============================\n Qualcomm QMI Bandlock V3.2\n===============================\n");
+ out("USAGE EXAMPLES\nsim 1\nsim 2\nrat auto\nrat gsm,wcdma,lte,nr\nlte 1,2,3,4,5\nlte all\nlte none\nnr 1,2,3,4,5\nsa 1,2,3,4,5\nnsa 1,2,3,4,5\nmode sa\nmode nsa\nmode both\nwcdma 1,5,8,19\ngsm 850,900,1800,1900\nlte all nr 1,2,38 rat lte,nr\nverbose on\nverbose off\nrefresh\nhardware\nreset\nexit\n");
  if(s->verbose)out("Verbose mode is ON (started with -verbose): every command prints the raw TX/RX\nbytes and decoded TLVs. Use 'verbose off' to quiet it.\n");
  else out("Verbose mode is OFF (default). Use 'verbose on', or relaunch with -verbose\n");
  draw_state(s);
@@ -495,6 +509,10 @@ static int cmd_wcdma_hardware(struct state*s){
 static int cmd_lte(struct state*s,char*a){
  u32 v[128];int c,i,pos=0,bad=0,has_high=0;u8 l[8],e[32],p[64],d=1;
  if(eq(a,"hardware")||eq(a,"all"))return cmd_lte_hardware(s);
+ if(eq(a,"none")){
+  zero(l,8);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LTE,l,8);
+  return setter(s,p,(u16)pos);
+ }
  c=plist(a,v,128,1,256);
  if(c<=0){setstatus(s,"Invalid LTE list.");return 0;}
  if(!s->hw_valid&&!query_hardware(s))return 0;
@@ -517,11 +535,11 @@ static int cmd_lte(struct state*s,char*a){
  else pos=addtlv(p,pos,TLV_LTE,l,8);
  return setter(s,p,(u16)pos);
 }
-static int cmd_nr(struct state*s,char*a,u8 id){u32 v[128];int c,i,pos=0,bad=0;u8 m[64],p[80],d=1;if(eq(a,"hardware")||eq(a,"all"))return cmd_nr_hardware(s,id);c=plist(a,v,128,1,512);if(c<=0){setstatus(s,"Invalid NR list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!mhas(s->hw_nr,v[i]))bad=1;if(bad){print_rejected("NR",v,c,s->hw_nr,512,"n");setstatus(s,"NR command not sent.");return 0;}zero(m,64);for(i=0;i<c;i++)mset(m,v[i]);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,id,m,64);return setter(s,p,(u16)pos);}
+static int cmd_nr(struct state*s,char*a,u8 id){u32 v[128];int c,i,pos=0,bad=0;u8 m[64],p[80],d=1;if(eq(a,"hardware")||eq(a,"all"))return cmd_nr_hardware(s,id);if(eq(a,"none")){zero(m,64);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,id,m,64);return setter(s,p,(u16)pos);}c=plist(a,v,128,1,512);if(c<=0){setstatus(s,"Invalid NR list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!mhas(s->hw_nr,v[i]))bad=1;if(bad){print_rejected("NR",v,c,s->hw_nr,512,"n");setstatus(s,"NR command not sent.");return 0;}zero(m,64);for(i=0;i<c;i++)mset(m,v[i]);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,id,m,64);return setter(s,p,(u16)pos);}
 static void set64(u8*p,u64 v){int i;for(i=0;i<8;i++)p[i]=(u8)(v>>(8*i));}
-static int cmd_gsm(struct state*s,char*a){u32 v[16];int c,i,pos=0,bad=0;u64 m;u8 x[8],p[20],d=1;if(eq(a,"hardware")||eq(a,"all"))return cmd_gsm_hardware(s);if(!s->valid)return 0;c=plist(a,v,16,1,2000);if(c<=0){setstatus(s,"Invalid GSM list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!hw_gsm_has(s,v[i]))bad=1;if(bad){out("Unsupported GSM band(s): ");{int f=1;for(i=0;i<c;i++)if(!hw_gsm_has(s,v[i])){if(!f)out(",");outnum(v[i]);f=0;}}out("\nSupported GSM bands: ");pgsm(s->hw_legacy);setstatus(s,"GSM command not sent.");return 0;}m=le64(s->legacy)&~((1ULL<<7)|(1ULL<<8)|(1ULL<<9)|(1ULL<<19)|(1ULL<<21));for(i=0;i<c;i++){if(v[i]==850)m|=1ULL<<19;else if(v[i]==900)m|=(1ULL<<8)|(1ULL<<9);else if(v[i]==1800)m|=1ULL<<7;else if(v[i]==1900)m|=1ULL<<21;}set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}
+static int cmd_gsm(struct state*s,char*a){u32 v[16];int c,i,pos=0,bad=0;u64 m;u8 x[8],p[20],d=1;if(eq(a,"hardware")||eq(a,"all"))return cmd_gsm_hardware(s);if(!s->valid)return 0;if(eq(a,"none")){m=le64(s->legacy)&~((1ULL<<7)|(1ULL<<8)|(1ULL<<9)|(1ULL<<19)|(1ULL<<21));set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}c=plist(a,v,16,1,2000);if(c<=0){setstatus(s,"Invalid GSM list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!hw_gsm_has(s,v[i]))bad=1;if(bad){out("Unsupported GSM band(s): ");{int f=1;for(i=0;i<c;i++)if(!hw_gsm_has(s,v[i])){if(!f)out(",");outnum(v[i]);f=0;}}out("\nSupported GSM bands: ");pgsm(s->hw_legacy);setstatus(s,"GSM command not sent.");return 0;}m=le64(s->legacy)&~((1ULL<<7)|(1ULL<<8)|(1ULL<<9)|(1ULL<<19)|(1ULL<<21));for(i=0;i<c;i++){if(v[i]==850)m|=1ULL<<19;else if(v[i]==900)m|=(1ULL<<8)|(1ULL<<9);else if(v[i]==1800)m|=1ULL<<7;else if(v[i]==1900)m|=1ULL<<21;}set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}
 static int wbit(u32 b){switch(b){case 1:return 22;case 2:return 23;case 3:return 24;case 4:return 25;case 5:return 26;case 6:return 27;case 7:return 48;case 8:return 49;case 9:return 50;case 10:return 51;case 11:return 52;case 12:return 53;case 13:return 54;case 14:return 55;case 15:return 56;case 16:return 57;case 17:return 58;case 18:return 59;case 19:return 60;default:return -1;}}
-static int cmd_wcdma(struct state*s,char*a){u32 v[32];int c,i,b,pos=0,bad=0;u64 m,clr=0;u8 x[8],p[20],d=1;if(eq(a,"hardware")||eq(a,"all"))return cmd_wcdma_hardware(s);if(!s->valid)return 0;c=plist(a,v,32,1,19);if(c<=0){setstatus(s,"Invalid WCDMA list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!hw_wcdma_has(s,v[i]))bad=1;if(bad){out("Unsupported WCDMA band(s): ");{int f=1;for(i=0;i<c;i++)if(!hw_wcdma_has(s,v[i])){if(!f)out(",");out("B");outnum(v[i]);f=0;}}out("\nSupported WCDMA bands: ");pwcdma(s->hw_legacy);setstatus(s,"WCDMA command not sent.");return 0;}for(i=1;i<=19;i++){b=wbit((u32)i);clr|=1ULL<<b;}m=le64(s->legacy)&~clr;for(i=0;i<c;i++){b=wbit(v[i]);m|=1ULL<<b;}set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}
+static int cmd_wcdma(struct state*s,char*a){u32 v[32];int c,i,b,pos=0,bad=0;u64 m,clr=0;u8 x[8],p[20],d=1;if(eq(a,"hardware")||eq(a,"all"))return cmd_wcdma_hardware(s);if(!s->valid)return 0;if(eq(a,"none")){for(i=1;i<=19;i++){b=wbit((u32)i);clr|=1ULL<<b;}m=le64(s->legacy)&~clr;set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}c=plist(a,v,32,1,19);if(c<=0){setstatus(s,"Invalid WCDMA list.");return 0;}if(!s->hw_valid&&!query_hardware(s))return 0;for(i=0;i<c;i++)if(!hw_wcdma_has(s,v[i]))bad=1;if(bad){out("Unsupported WCDMA band(s): ");{int f=1;for(i=0;i<c;i++)if(!hw_wcdma_has(s,v[i])){if(!f)out(",");out("B");outnum(v[i]);f=0;}}out("\nSupported WCDMA bands: ");pwcdma(s->hw_legacy);setstatus(s,"WCDMA command not sent.");return 0;}for(i=1;i<=19;i++){b=wbit((u32)i);clr|=1ULL<<b;}m=le64(s->legacy)&~clr;for(i=0;i<c;i++){b=wbit(v[i]);m|=1ULL<<b;}set64(x,m);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_LEGACY,x,8);return setter(s,p,(u16)pos);}
 
 
 /* Restore every band family to the modem-reported hardware capability for
@@ -694,7 +712,7 @@ static int process(struct state*s,char*l){
 static int run(int argc,char**argv){
  struct state s;char line[512];int i,verbose_flag=0;
  for(i=1;i<argc;i++)if(eq(argv[i],"-verbose"))verbose_flag=1;
- zero(&s,sizeof(s));s.fd=-1;s.sim=1;s.verbose=verbose_flag;setstatus(&s,"Starting...");if(!open_nas(&s)){draw_initial(&s);return 2;}if(!bind_sim(&s,1)){draw_initial(&s);sc1(SYS_close,s.fd);return 3;}query(&s);(void)query_hardware(&s);setstatus(&s,"Ready.");draw_initial(&s);for(;;){if(readline(line,sizeof(line))<0)break;if(!line[0]){out("Input: ");continue;}if(process(&s,line)<0)break;draw_state(&s);}out("\nQualcomm QMI Bandlock V3 closed.\n");if(s.fd>=0)sc1(SYS_close,s.fd);return 0;
+ zero(&s,sizeof(s));s.fd=-1;s.sim=1;s.verbose=verbose_flag;setstatus(&s,"Starting...");if(!open_nas(&s)){draw_initial(&s);return 2;}if(!bind_sim(&s,1)){draw_initial(&s);sc1(SYS_close,s.fd);return 3;}query(&s);(void)query_hardware(&s);setstatus(&s,"Ready.");draw_initial(&s);for(;;){if(readline(line,sizeof(line))<0)break;if(!line[0]){out("Input: ");continue;}if(process(&s,line)<0)break;draw_state(&s);}out("\nQualcomm QMI Bandlock V3.2 closed.\n");if(s.fd>=0)sc1(SYS_close,s.fd);return 0;
 }
 void c_start(u64*stack){int rc;int argc=(int)stack[0];char**argv=(char**)&stack[1];rc=run(argc,argv);sc1(SYS_exit,rc);for(;;){}}
 __asm__(".global _start\n.type _start,%function\n_start:\nmov x0,sp\nbl c_start\nb .\n");
