@@ -1,1 +1,5 @@
-# No custom rules required for this small app.
+# libsu AIDL interfaces
+-keep class com.topjohnwu.superuser.** { *; }
+
+# Keep app entry points and AIDL
+-keep class dev.qcom.bandmenu.** { *; }

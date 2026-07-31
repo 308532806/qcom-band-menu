@@ -1,4 +1,5 @@
 pluginManagement {
+    includeBuild("../miuix/build-plugins")
     repositories {
         google()
         mavenCentral()
@@ -11,8 +12,16 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven("https://jitpack.io")
     }
 }
 
-rootProject.name = "QualcommForcings"
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+}
+
+includeBuild("../miuix")
+includeBuild("../AndroidLiquidGlass")
+
+rootProject.name = "QcomBandMenu"
 include(":app")
