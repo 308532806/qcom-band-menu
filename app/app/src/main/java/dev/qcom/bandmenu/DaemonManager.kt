@@ -290,21 +290,68 @@ class DaemonManager(private val context: Context) {
 
     @Synchronized
     fun stop() {
-        AppLog.d(TAG, "stop")
+        AppLog.i(TAG, "stop: sending shutdown...")
+        var sentShutdown = false
         try {
             writer?.let { w ->
                 w.write(JsonRequestBuilder.shutdown().toString())
                 w.write("\n")
                 w.flush()
+                sentShutdown = true
             }
+            if (sentShutdown) Thread.sleep(300)
         } catch (e: Exception) {
-            AppLog.w(TAG, "stop: shutdown failed", e)
+            AppLog.w(TAG, "stop: shutdown send failed", e)
         }
         try { socket?.close() } catch (_: Exception) {}
         socket = null
         writer = null
         reader = null
         isReady.value = false
+        // Fallback: ensure the daemon process is killed even if the
+        // shutdown command didn't reach it.
+        Thread {
+            try {
+                Shell.cmd("pkill -9 -f qcom-bandlockd 2>/dev/null; true").exec()
+                AppLog.i(TAG, "stop: pkill fallback done")
+            } catch (e: Exception) {
+                AppLog.w(TAG, "stop: pkill fallback failed", e)
+            }
+        }.start()
+    }
+
+    /**
+     * Synchronous version of stop() — blocks the calling thread until the
+     * daemon is confirmed dead. Use from onBackPressedDispatcher to ensure
+     * the daemon is killed before the activity finishes.
+     */
+    @Synchronized
+    fun stopBlocking() {
+        AppLog.i(TAG, "stopBlocking: sending shutdown...")
+        var sentShutdown = false
+        try {
+            writer?.let { w ->
+                w.write(JsonRequestBuilder.shutdown().toString())
+                w.write("\n")
+                w.flush()
+                sentShutdown = true
+            }
+            if (sentShutdown) Thread.sleep(300)
+        } catch (e: Exception) {
+            AppLog.w(TAG, "stopBlocking: shutdown send failed", e)
+        }
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
+        writer = null
+        reader = null
+        isReady.value = false
+        // Synchronous pkill — blocks until confirmed dead
+        try {
+            Shell.cmd("pkill -9 -f qcom-bandlockd 2>/dev/null; true").exec()
+            AppLog.i(TAG, "stopBlocking: pkill done, daemon should be dead")
+        } catch (e: Exception) {
+            AppLog.w(TAG, "stopBlocking: pkill failed", e)
+        }
     }
 
     fun retry() {

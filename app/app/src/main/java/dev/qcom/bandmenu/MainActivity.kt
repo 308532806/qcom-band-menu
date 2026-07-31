@@ -2,6 +2,7 @@ package dev.qcom.bandmenu
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
@@ -37,6 +38,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Intercept back gesture: stop the daemon synchronously before
+        // letting the activity finish. This guarantees the daemon is killed
+        // even though onDestroy is not reliably called by the system.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                Thread {
+                    daemonManager.stopBlocking()
+                    runOnUiThread { finish() }
+                }.start()
+            }
+        })
 
         setContent {
             MiuixTheme(colors = darkColorScheme()) {
@@ -346,6 +359,13 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (isFinishing) {
+            daemonManager.stop()
         }
     }
 
