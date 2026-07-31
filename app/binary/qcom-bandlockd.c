@@ -624,15 +624,17 @@ static int cmd_reset(struct state*s){
  if(!setter(s,p,(u16)pos))return 0;
 
  for(i=0;i<64;i++)if(s->hw_nr[i]){any_nr=1;break;}
- if(!any_nr){setstatus(s,"Reset failed: no hardware NR bands reported.");return 0;}
 
- /* Restore combined NR, independent SA, and independent NSA masks. */
- pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_COMBINED,s->hw_nr,64);
- if(!setter(s,p,(u16)pos))return 0;
- pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_SA_SET,s->hw_nr,64);
- if(!setter(s,p,(u16)pos))return 0;
- pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_NSA_SET,s->hw_nr,64);
- if(!setter(s,p,(u16)pos))return 0;
+ /* Restore combined NR, independent SA, and independent NSA masks.
+    Skip NR SETs on devices with no NR hardware capability. */
+ if(any_nr){
+  pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_COMBINED,s->hw_nr,64);
+  if(!setter(s,p,(u16)pos))return 0;
+  pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_SA_SET,s->hw_nr,64);
+  if(!setter(s,p,(u16)pos))return 0;
+  pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_NSA_SET,s->hw_nr,64);
+  if(!setter(s,p,(u16)pos))return 0;
+ }
 
  setstatus(s,"All band masks restored to hardware-supported bands.");
  return 1;
