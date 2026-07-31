@@ -12,8 +12,9 @@ Apply cellular forcings such as RAT preferences, band locking, and 5G-NR modes t
 - Restore band locks to hardware defaults
 - Available as both an Android app and a command-line utility
 
-<img height="600" alt="Qualcomm QMI Band Control app interface" src="https://github.com/user-attachments/assets/7ec924d5-692c-4946-a1eb-0f3a14e8ade7" />
-<img height="600" alt="Qualcomm QMI Band Control command-line interface" src="https://github.com/user-attachments/assets/b2f3ce9b-8122-48f6-8237-76ca0c8ef53a" />
+<img height="600" alt="image" src="https://github.com/user-attachments/assets/dbd960de-2027-4221-931d-ef63e448bc7b" />
+<img height="600" alt="image" src="https://github.com/user-attachments/assets/3a369f98-895e-4c53-94f1-f9e44227b51b" />
+
 
 # Requirements
 
