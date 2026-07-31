@@ -17,7 +17,7 @@ Apply cellular forcings such as RAT preferences, band locking, and 5G-NR modes t
 
 # Requirements
 
-- An Android device with a compatible Qualcomm modem
+- Qualcomm device
 - Root access
 - Android 11 or newer for the app version
 - A terminal environment, such as Termux or ADB shell, for command-line usage
