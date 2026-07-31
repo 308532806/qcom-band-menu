@@ -1,0 +1,320 @@
+package dev.qcom.bandmenu
+
+import android.content.Context
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
+import android.os.Handler
+import android.os.Looper
+import android.os.Process
+import androidx.compose.runtime.mutableStateOf
+import com.topjohnwu.superuser.Shell
+import org.json.JSONException
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.BufferedWriter
+import java.io.File
+import java.io.IOException
+
+class DaemonManager(private val context: Context) {
+
+    companion object {
+        private const val TAG = "QcomBand"
+        private const val BINARY_NAME = "qcom-bandlockd"
+        private const val SOCKET_NAME = "qcom_bandlockd"
+    }
+
+    var isReady = mutableStateOf(false)
+        private set
+
+    var isRootDenied = mutableStateOf(false)
+        private set
+
+    var launchError = mutableStateOf<String?>(null)
+        private set
+
+    @Volatile
+    private var socket: LocalSocket? = null
+    @Volatile
+    private var writer: BufferedWriter? = null
+    @Volatile
+    private var reader: BufferedReader? = null
+    private var requestId = 0
+
+    fun start(onDenied: () -> Unit, onLaunchFailed: (String) -> Unit = {}) {
+        AppLog.d(TAG, "start: requesting shell...")
+        launchError.value = null
+        Shell.getShell { shell ->
+            AppLog.d(TAG, "start: shell obtained, isRoot=${shell.isRoot}, status=${shell.status}")
+            if (shell.isRoot) {
+                Thread { launchAndConnect(onLaunchFailed) }.start()
+            } else {
+                AppLog.e(TAG, "start: root denied")
+                Handler(Looper.getMainLooper()).post {
+                    isRootDenied.value = true
+                    onDenied()
+                }
+            }
+        }
+    }
+
+    private fun launchAndConnect(onLaunchFailed: (String) -> Unit) {
+        // Try connecting to an existing daemon first — avoids ETXTBSY when
+        // overwriting a binary that's still being executed by a running daemon.
+        AppLog.i(TAG, "launchAndConnect: trying existing daemon...")
+        if (tryConnect()) {
+            AppLog.i(TAG, "launchAndConnect: connected to existing daemon")
+            Handler(Looper.getMainLooper()).post { isReady.value = true }
+            return
+        }
+        AppLog.i(TAG, "launchAndConnect: no existing daemon, starting fresh")
+
+        // No existing daemon reachable — kill any stale process before copying.
+        // Use SIGKILL (-9) since the daemon may not handle SIGTERM.
+        Shell.cmd("pkill -9 -f qcom-bandlockd 2>/dev/null; true").exec()
+        Thread.sleep(500)
+
+        try {
+            val destFile = File(context.filesDir, BINARY_NAME)
+            context.assets.open(BINARY_NAME).use { input ->
+                destFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            destFile.setExecutable(true)
+            AppLog.i(TAG, "launchAndConnect: binary copied, size=${destFile.length()}")
+        } catch (e: Exception) {
+            AppLog.e(TAG, "launchAndConnect: failed to copy binary", e)
+            val msg = "Failed to copy daemon binary: ${e.message}"
+            launchError.value = msg
+            Handler(Looper.getMainLooper()).post {
+                isReady.value = false
+                onLaunchFailed(msg)
+            }
+            return
+        }
+
+        val uid = Process.myUid()
+        val path = File(context.filesDir, BINARY_NAME).absolutePath
+        val stderrFile = File(context.cacheDir, "daemon_stderr.log")
+        if (stderrFile.exists()) stderrFile.delete()
+        AppLog.i(TAG, "launchAndConnect: launching daemon: $path -uid $uid")
+        // </dev/null prevents the daemon from inheriting the shell's stdin,
+        // which would cause exec() to block waiting for the pipe to close.
+        Shell.cmd("setsid '$path' -uid $uid </dev/null >/dev/null 2>'${stderrFile.absolutePath}' &").exec()
+        AppLog.i(TAG, "launchAndConnect: daemon launch command returned")
+
+        for (i in 1..60) {
+            Thread.sleep(250)
+            if (tryConnect()) {
+                AppLog.i(TAG, "launchAndConnect: connected after ${(i * 250)}ms")
+                Handler(Looper.getMainLooper()).post { isReady.value = true }
+                return
+            }
+        }
+
+        AppLog.e(TAG, "launchAndConnect: failed to connect after 15s")
+        val stderr = if (stderrFile.exists()) stderrFile.readText().trim() else ""
+        val msg = if (stderr.isNotEmpty()) {
+            "Daemon failed to start. stderr:\n$stderr"
+        } else {
+            "Daemon failed to start (no stderr output)"
+        }
+        launchError.value = msg
+        if (stderrFile.exists()) stderrFile.delete()
+        Handler(Looper.getMainLooper()).post {
+            isReady.value = false
+            onLaunchFailed(msg)
+        }
+    }
+
+    private fun tryConnect(): Boolean {
+        val s = LocalSocket()
+        return try {
+            val addr = LocalSocketAddress(SOCKET_NAME, LocalSocketAddress.Namespace.ABSTRACT)
+            AppLog.i(TAG, "tryConnect: connecting to abstract '$SOCKET_NAME'...")
+            // NOTE: connect(addr, timeout) throws UnsupportedOperationException on some
+            // Android versions for abstract namespace sockets. Use the no-timeout
+            // overload instead. The retry loop in launchAndConnect handles the
+            // case where the daemon isn't ready yet.
+            s.connect(addr)
+            AppLog.i(TAG, "tryConnect: connected, setting up streams")
+            s.soTimeout = 5000
+            socket = s
+            writer = s.outputStream.bufferedWriter()
+            reader = s.inputStream.bufferedReader()
+            // Verify the connection is truly usable: send a query and read
+            // the response. A stale daemon with a different -uid will accept
+            // the TCP connection then immediately close it (UID mismatch),
+            // so a bare connect() is not sufficient.
+            val probe = JsonRequestBuilder.query()
+            probe.put("id", ++requestId)
+            val reqStr = probe.toString()
+            AppLog.i(TAG, "tryConnect: sending probe: $reqStr")
+            writer!!.write(reqStr)
+            writer!!.write("\n")
+            writer!!.flush()
+            AppLog.i(TAG, "tryConnect: probe sent, waiting for response...")
+            val line = reader!!.readLine()
+            if (line == null) {
+                AppLog.i(TAG, "tryConnect: probe failed (connection closed by daemon)")
+                throw IOException("Daemon closed connection (uid mismatch?)")
+            }
+            AppLog.i(TAG, "tryConnect: probe response (${line.length} chars)")
+            // Parse to verify it's valid JSON
+            JSONObject(line)
+            // Connection is good — upgrade to full 15s timeout
+            s.soTimeout = 15000
+            true
+        } catch (e: Exception) {
+            AppLog.i(TAG, "tryConnect: failed: ${e.javaClass.name}: ${e.message}")
+            try { s.close() } catch (_: Exception) {}
+            socket = null
+            writer = null
+            reader = null
+            false
+        }
+    }
+
+    /**
+     * Attempts to reconnect to the daemon. On success, sends a query to resync
+     * state (per spec §3). Returns true if reconnected and resynced.
+     */
+    @Synchronized
+    fun reconnect(): Boolean {
+        AppLog.d(TAG, "reconnect")
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
+        writer = null
+        reader = null
+        return if (tryConnect()) {
+            isReady.value = true
+            // Resync by sending a query
+            try {
+                sendRequest(JsonRequestBuilder.query())
+                true
+            } catch (e: Exception) {
+                AppLog.w(TAG, "reconnect: query after reconnect failed", e)
+                try { socket?.close() } catch (_: Exception) {}
+                socket = null
+                writer = null
+                reader = null
+                isReady.value = false
+                false
+            }
+        } else {
+            isReady.value = false
+            false
+        }
+    }
+
+    @Synchronized
+    fun sendRequest(request: JSONObject): JSONObject {
+        val id = ++requestId
+        request.put("id", id)
+
+        // C1: Attempt reconnect if writer/reader is null
+        if (writer == null || reader == null) {
+            if (!reconnect()) {
+                throw IOException("Not connected")
+            }
+        }
+
+        val w = writer ?: throw IOException("Not connected")
+        val r = reader ?: throw IOException("Not connected")
+
+        val reqStr = request.toString()
+        AppLog.d(TAG, "sendRequest: $reqStr")
+        try {
+            w.write(reqStr)
+            w.write("\n")
+            w.flush()
+        } catch (e: IOException) {
+            disconnect()
+            throw e
+        }
+
+        val responseLine = try {
+            r.readLine()
+        } catch (e: IOException) {
+            disconnect()
+            throw e
+        }
+
+        if (responseLine == null) {
+            disconnect()
+            throw IOException("Connection closed")
+        }
+
+        AppLog.d(TAG, "sendRequest: response: $responseLine")
+
+        // I4: Catch malformed JSON, treat as connection error
+        val resp = try {
+            JSONObject(responseLine)
+        } catch (e: JSONException) {
+            AppLog.w(TAG, "sendRequest: malformed JSON: $responseLine", e)
+            disconnect()
+            throw IOException("Malformed JSON response: $responseLine")
+        }
+
+        // M9: Verify response id matches request id
+        val respId = resp.optInt("id", -1)
+        if (respId != id) {
+            AppLog.w(TAG, "sendRequest: id mismatch (expected $id, got $respId)")
+        }
+
+        return resp
+    }
+
+    /**
+     * Tears down the connection and resets state. Called from within
+     * sendRequest (which holds the lock) when an I/O error occurs.
+     */
+    private fun disconnect() {
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
+        writer = null
+        reader = null
+        isReady.value = false
+    }
+
+    fun query(): JSONObject = sendRequest(JsonRequestBuilder.query())
+    fun refresh(): JSONObject = sendRequest(JsonRequestBuilder.refresh())
+    fun simSet(sim: Int): JSONObject = sendRequest(JsonRequestBuilder.simSet(sim))
+    fun ratSet(rats: Set<RatType>): JSONObject = sendRequest(JsonRequestBuilder.ratSet(rats))
+    fun gsmSet(bands: Set<Int>): JSONObject = sendRequest(JsonRequestBuilder.gsmSet(bands))
+    fun wcdmaSet(bands: Set<Int>): JSONObject = sendRequest(JsonRequestBuilder.wcdmaSet(bands))
+    fun lteSet(bands: Set<Int>): JSONObject = sendRequest(JsonRequestBuilder.lteSet(bands))
+    fun nrSaSet(bands: Set<Int>): JSONObject = sendRequest(JsonRequestBuilder.nrSaSet(bands))
+    fun nrNsaSet(bands: Set<Int>): JSONObject = sendRequest(JsonRequestBuilder.nrNsaSet(bands))
+    fun modeSet(mode: NrMode): JSONObject = sendRequest(JsonRequestBuilder.modeSet(mode))
+    fun reset(): JSONObject = sendRequest(JsonRequestBuilder.reset())
+    fun verboseSet(verbose: Boolean): JSONObject = sendRequest(JsonRequestBuilder.verboseSet(verbose))
+
+    @Synchronized
+    fun stop() {
+        AppLog.d(TAG, "stop")
+        try {
+            writer?.let { w ->
+                w.write(JsonRequestBuilder.shutdown().toString())
+                w.write("\n")
+                w.flush()
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "stop: shutdown failed", e)
+        }
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
+        writer = null
+        reader = null
+        isReady.value = false
+    }
+
+    fun retry() {
+        AppLog.d(TAG, "retry")
+        isReady.value = false
+        isRootDenied.value = false
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
+        writer = null
+        reader = null
+        start({})
+    }
+}
