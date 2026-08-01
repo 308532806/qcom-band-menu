@@ -1388,9 +1388,11 @@ static void do_command(struct state*s,const char*req,int*ok,int*did_set,int*shut
  if(eq(cmd,"sim_set")){
   s64 sim;
   if(!json_get_int(req,"sim",&sim)||(sim!=1&&sim!=2)){setstatus(s,"Field 'sim' must be the integer 1 or 2.");set_stage(stage,stage_cap,"bad_request");return;}
-  if(!reopen_bound(s,(int)sim)){s->valid=0;setstatus(s,"SIM switch failed.");set_stage(stage,stage_cap,"daemon");return;}
-  *ok=query(s);if(!*ok)set_stage(stage,stage_cap,"daemon");
-  return;
+   if(!reopen_bound(s,(int)sim)){s->valid=0;setstatus(s,"SIM switch failed.");set_stage(stage,stage_cap,"daemon");return;}
+   *ok=query(s);if(!*ok){set_stage(stage,stage_cap,"daemon");return;}
+   query_lte_cell_lock(s);
+   query_nr_cell_lock(s);
+   return;
  }
  if(eq(cmd,"rat_set")){
   if(!json_get_string(req,"rat",arg,sizeof(arg))){setstatus(s,"Missing 'rat' string field (\"auto\" or \"gsm,wcdma,lte,nr\").");set_stage(stage,stage_cap,"bad_request");return;}

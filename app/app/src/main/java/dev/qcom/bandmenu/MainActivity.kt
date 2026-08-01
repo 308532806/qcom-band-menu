@@ -286,7 +286,7 @@ class MainActivity : ComponentActivity() {
                                 val typeName = when (fieldIndex) {
                                     0 -> "NR-ARFCN"; 1 -> "PCI"; 2 -> "MultiPCI"; 3 -> "gNB"; 4 -> "LTE PCI"; else -> "Unknown"
                                 }
-                                cellLockResult = CellLockResult(fieldIndex, typeName, success, errorMsg)
+                                cellLockResult = CellLockResult(sim, fieldIndex, typeName, success, errorMsg)
 
                                 if (newCellLock != null) {
                                     val slot = sim - 1
@@ -305,12 +305,22 @@ class MainActivity : ComponentActivity() {
                                 var errorMsg: String? = null
                                 withContext(Dispatchers.IO) {
                                     try {
-                                        JsonStateParser.parseResponse(daemonManager.simSet(sim))
-                                        val nrResp = JsonStateParser.parseResponse(daemonManager.nrCellLockClear())
+                                        val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
+                                        if (!simResp.ok) {
+                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            return@withContext
+                                        }
+                                        // NR clear: modem may reject if no lock active — that's the
+                                        // desired state. Wrap in own try-catch so I/O errors don't
+                                        // abort the LTE clear.
+                                        try {
+                                            JsonStateParser.parseResponse(daemonManager.nrCellLockClear())
+                                        } catch (e: Exception) {
+                                            AppLog.w(TAG, "CellLock clear all: NR clear failed (ignored)", e)
+                                        }
                                         val lteResp = JsonStateParser.parseResponse(daemonManager.lteCellLockClear())
-                                        if (!nrResp.ok) errorMsg = nrResp.error?.message
-                                        else if (!lteResp.ok) errorMsg = lteResp.error?.message
-                                        newCellLock = lteResp.cellLockState ?: nrResp.cellLockState
+                                        if (!lteResp.ok) errorMsg = lteResp.error?.message
+                                        newCellLock = lteResp.cellLockState
                                     } catch (e: Exception) {
                                         errorMsg = "Clear all failed: ${e.message}"
                                         AppLog.e(TAG, "CellLock clear all: error", e)
@@ -331,16 +341,26 @@ class MainActivity : ComponentActivity() {
                         scope.launch {
                             modemLock.withLock {
                                 var newCellLock: CellLockState? = null
+                                var ioError = false
                                 var errorMsg: String? = null
                                 withContext(Dispatchers.IO) {
                                     try {
-                                        JsonStateParser.parseResponse(daemonManager.simSet(sim))
-                                        val resp = JsonStateParser.parseResponse(daemonManager.nrCellLockClear())
-                                        if (!resp.ok) errorMsg = resp.error?.message
-                                        newCellLock = resp.cellLockState
+                                        val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
+                                        if (!simResp.ok) {
+                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            return@withContext
+                                        }
+                                        try {
+                                            val resp = JsonStateParser.parseResponse(daemonManager.nrCellLockClear())
+                                            newCellLock = resp.cellLockState
+                                        } catch (e: Exception) {
+                                            // NR clear I/O error — not a modem rejection.
+                                            AppLog.e(TAG, "CellLock clear 5G: I/O error", e)
+                                            ioError = true
+                                        }
                                     } catch (e: Exception) {
-                                        errorMsg = "Clear 5G failed: ${e.message}"
                                         AppLog.e(TAG, "CellLock clear 5G: error", e)
+                                        ioError = true
                                     }
                                 }
                                 if (newCellLock != null) {
@@ -350,7 +370,11 @@ class MainActivity : ComponentActivity() {
                                     else
                                         modemState?.copy(sim2CellLock = newCellLock!!)
                                 }
-                                snackbarMessage = errorMsg ?: "Cleared 5G cell lock for SIM $sim"
+                                snackbarMessage = when {
+                                    errorMsg != null -> errorMsg
+                                    ioError -> "Clear 5G failed (connection error)"
+                                    else -> "Cleared 5G cell lock for SIM $sim"
+                                }
                             }
                         }
                     },
@@ -361,7 +385,11 @@ class MainActivity : ComponentActivity() {
                                 var errorMsg: String? = null
                                 withContext(Dispatchers.IO) {
                                     try {
-                                        JsonStateParser.parseResponse(daemonManager.simSet(sim))
+                                        val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
+                                        if (!simResp.ok) {
+                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            return@withContext
+                                        }
                                         val resp = JsonStateParser.parseResponse(daemonManager.lteCellLockClear())
                                         if (!resp.ok) errorMsg = resp.error?.message
                                         newCellLock = resp.cellLockState
@@ -392,7 +420,11 @@ class MainActivity : ComponentActivity() {
                                 var errorMsg: String? = null
                                 withContext(Dispatchers.IO) {
                                     try {
-                                        val resp = JsonStateParser.parseResponse(daemonManager.query())
+                                        // Switch to the selected SIM first to ensure we read
+                                        // the correct SIM's cell lock state, not whatever SIM
+                                        // the daemon happened to be on.
+                                        val sim = cellLockSelectedSim + 1
+                                        val resp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         if (resp.ok) {
                                             newCellLock = resp.cellLockState
                                         } else {
