@@ -284,9 +284,25 @@ class DaemonManager(private val context: Context) {
     fun lteSet(bands: Set<Int>): JSONObject = sendRequest(JsonRequestBuilder.lteSet(bands))
     fun nrSaSet(bands: Set<Int>): JSONObject = sendRequest(JsonRequestBuilder.nrSaSet(bands))
     fun nrNsaSet(bands: Set<Int>): JSONObject = sendRequest(JsonRequestBuilder.nrNsaSet(bands))
+    fun nrSet(bands: Set<Int>): JSONObject = sendRequest(JsonRequestBuilder.nrSet(bands))
     fun modeSet(mode: NrMode): JSONObject = sendRequest(JsonRequestBuilder.modeSet(mode))
     fun reset(): JSONObject = sendRequest(JsonRequestBuilder.reset())
     fun verboseSet(verbose: Boolean): JSONObject = sendRequest(JsonRequestBuilder.verboseSet(verbose))
+
+    fun lteCellLockSet(earfcn: Int, pci: Int): JSONObject =
+        sendRequest(JsonRequestBuilder.lteCellLockSet(earfcn, pci))
+    fun lteCellLockClear(): JSONObject = sendRequest(JsonRequestBuilder.lteCellLockClear())
+    fun nrCellLockPciSet(arfcn: Int, pci: Int, scsKhz: Int, band: Int): JSONObject =
+        sendRequest(JsonRequestBuilder.nrCellLockPciSet(arfcn, pci, scsKhz, band))
+    fun nrCellLockArfcnSet(arfcn: Int, scsKhz: Int): JSONObject =
+        sendRequest(JsonRequestBuilder.nrCellLockArfcnSet(arfcn, scsKhz))
+    fun nrCellLockMultiPciSet(arfcn: Int, scsKhz: Int, band: Int, pciList: List<Int>): JSONObject =
+        sendRequest(JsonRequestBuilder.nrCellLockMultiPciSet(arfcn, scsKhz, band, pciList))
+    fun nrCellLockGnbSet(idBits: Int, gnbIds: List<Int>): JSONObject =
+        sendRequest(JsonRequestBuilder.nrCellLockGnbSet(idBits, gnbIds))
+    fun nrCellLockClear(): JSONObject = sendRequest(JsonRequestBuilder.nrCellLockClear())
+    fun queryLteCellLock(): JSONObject = sendRequest(JsonRequestBuilder.queryLteCellLock())
+    fun queryNrCellLock(): JSONObject = sendRequest(JsonRequestBuilder.queryNrCellLock())
 
     @Synchronized
     fun stop() {

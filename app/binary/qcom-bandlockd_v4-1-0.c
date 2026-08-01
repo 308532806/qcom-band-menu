@@ -132,6 +132,68 @@
  * by compiling/running in the environment this file was written in (no
  * aarch64 toolchain or device available there) -- please confirm the
  * daemon starts and accepts a connection on first deployment.
+ *
+ * v4.0.4 -- NR independent SA/NSA band-lock capability probe:
+ *   Some older devices/firmware only understand the combined NR band mask
+ *   (TLV 0x2B) and reject independent SA-only (0x2F) / NSA-only (0x30) SET
+ *   requests outright. The app previously had no way to know this ahead of
+ *   time, so it could offer per-domain NR band controls that always failed
+ *   on those devices. This revision ports the read-back-then-resend probe
+ *   from the standalone qcom-band-menu-compatibility tool into the daemon
+ *   itself: it reads the modem's current NR-SA/NR-NSA masks (TLV 0x2C/
+ *   0x2D, exactly as query() already does) and resends those same masks
+ *   through the independent SET ids (0x2F/0x30). Because the mask being
+ *   written back is identical to the one already active, the probe cannot
+ *   change what's locked -- it only reveals whether the modem accepts
+ *   writes to those TLV ids at all. The probe runs once automatically at
+ *   daemon startup (see run()) and again any time the app sends a
+ *   {"cmd":"query_nr_independent_capability"} request, so the app can
+ *   check it both on daemon spawn and on its own launch as required. The
+ *   result -- including the raw QMI result/error codes, and, in verbose
+ *   mode, the full request/response hex + decoded TLVs for both probes --
+ *   is exposed via the new "nr_independent_capability" field that now
+ *   appears in every response's "state" object, so the app can gate its
+ *   NR-SA/NR-NSA UI without a round-trip on every screen. See
+ *   query_nr_independent_capability()/jcapability() below. Every response
+ *   now also carries a top-level "version" field ("4.0.4") for the app to
+ *   check protocol/daemon compatibility.
+ *
+ * v4.1.0 -- Cell lock (specific EARFCN/PCI and NR ARFCN/PCI/multi-PCI/
+ *   gNodeB-allow-list locking), ported from qcom-cell-lock-test.c:
+ *   Distinct from the band-family locking above (TLV ids 0x11-0x30 on
+ *   NAS messages 0x0033/0x0034), this is a *separate* QMI feature that
+ *   pins the modem to one or more specific cells (by EARFCN+PCI for LTE,
+ *   or by ARFCN/PCI/multi-PCI-list/gNodeB-allow-list for NR), using its
+ *   own message ids (0x00D7/0x00D8 for LTE, 0x010E/0x010F for NR) and its
+ *   own TLV numbering local to those messages -- see the TLV_LTECELL_ and
+ *   TLV_NRCELL_ defines below. Every byte this sends is carried over
+ *   unchanged from qcom-cell-lock-test.c's set_lte/clear_lte/nr_unlock/
+ *   nr_arfcn/nr_pci/nr_multi/nr_gnb; only the sink changed (JSON fields
+ *   instead of terminal prints), same as the rest of this file's
+ *   architecture.
+ *
+ *   Two behaviors carried over/confirmed from that tool, worth knowing:
+ *     - LTE cell-lock GET (TLV 0x10 on message 0x00D7) reports each
+ *       locked cell's EARFCN as a 16-bit field, even though the SET side
+ *       (message 0x00D8) accepts a full 32-bit EARFCN. This is ported
+ *       exactly as captured/tested, not "fixed" to 32 bits -- confirmed
+ *       intentional, not a porting bug. An EARFCN above 65535 (e.g. some
+ *       B70/B71 channels) will read back truncated even though the SET
+ *       that locked it carried the full value.
+ *     - NR cell-lock clear (type=2 via message 0x010E) is rejected by
+ *       some/most firmware when no NR cell lock is currently active --
+ *       unlike LTE clear, which always succeeds. Confirmed real modem
+ *       behavior, not a bug in this daemon. cmd_nr_cell_lock_clear()
+ *       handles this by reading the current lock type first and, if it's
+ *       already "none", skipping the write entirely and reporting
+ *       synthetic success -- the app never sees this particular
+ *       rejection. See cmd_nr_cell_lock_clear() below.
+ *
+ *   New commands: query_lte_cell_lock, query_nr_cell_lock,
+ *   lte_cell_lock_set, lte_cell_lock_clear, nr_cell_lock_pci_set,
+ *   nr_cell_lock_arfcn_set, nr_cell_lock_multi_pci_set,
+ *   nr_cell_lock_gnb_set, nr_cell_lock_clear. New state fields:
+ *   "lte_cell_lock", "nr_cell_lock". See qcom-bandlockd-app-interface.md.
  */
 
 typedef unsigned char u8;
@@ -169,6 +231,44 @@ enum { AF_UNIX=1,AF_QIPCRTR=42,SOCK_STREAM=1,SOCK_DGRAM=2,SOL_SOCKET=1,SO_RCVTIM
 #define TLV_NR_NSA_SET 0x30u  /* write id for an independent NR-NSA lock */
 #define TLV_NR_MODE 0x2Eu
 
+/* ── Cell lock: a separate QMI feature from the band-family locking above.
+ * Its own message ids, and TLV ids that are only meaningful *within* those
+ * specific messages (QMI TLV numbering is per-message, not global -- e.g.
+ * TLV_NRCELL_SET_PCI and TLV_NRCELL_GET_TYPE are both 0x10 but never
+ * appear in the same buffer, since one is a SET request TLV and the other
+ * a GET reply TLV on a different message id entirely). See the v4.1.0
+ * header note above and qcom-cell-lock-test.c for where these came from. */
+#define MSG_LTE_CELL_LOCK_GET 0x00D7u
+#define MSG_LTE_CELL_LOCK_SET 0x00D8u
+#define MSG_NR_CELL_LOCK_SET  0x010Eu
+#define MSG_NR_CELL_LOCK_GET  0x010Fu
+
+/* LTE cell-lock SET (0x00D8) TLVs */
+#define TLV_LTECELL_SET_LOCK  0x01u /* value: enable:u8, then [pci:u16,earfcn:u32] only when enable=1 (7 bytes total when enabled, 1 byte when clearing) */
+#define TLV_LTECELL_SET_APPLY 0x10u /* value: apply:u8=1 */
+/* LTE cell-lock GET (0x00D7) reply TLV */
+#define TLV_LTECELL_GET_LIST  0x10u /* value: count:u8, then count*[pci:u16,earfcn:u16] -- EARFCN read back as 16-bit, see v4.1.0 header note */
+
+/* NR cell-lock SET (0x010E) TLVs */
+#define TLV_NRCELL_SET_TYPE   0x01u /* value: type:u32 -- 0=PCI,1=ARFCN,2=none,3=multi-PCI,4=gNodeB allow-list */
+#define TLV_NRCELL_SET_PCI    0x10u /* value: pci:u16,scs:u32,arfcn:u32,band_mask:64B (74 bytes) -- for type=0 */
+#define TLV_NRCELL_SET_ARFCN  0x11u /* value: count:u8,arfcn:u32,scs:u32 (9 bytes; count always 1 here) -- for type=1 */
+#define TLV_NRCELL_SET_MULTI  0x12u /* value: count:u8,pci[]:u16*count,scs_mask:u16,arfcn:u32,band_mask:64B -- for type=3 */
+#define TLV_NRCELL_SET_GNB    0x13u /* value: count:u8,gnb_id[]:u64*count,id_bits:u8 -- for type=4 */
+/* NR cell-lock GET (0x010F) reply TLVs -- note the ids shift by one vs the SET side above; this is exactly what the modem reports and is carried over as-is. */
+#define TLV_NRCELL_GET_TYPE   0x10u /* value: type:u32, same enum as TLV_NRCELL_SET_TYPE */
+#define TLV_NRCELL_GET_PCI    0x11u /* value: same 74-byte shape as TLV_NRCELL_SET_PCI's value */
+#define TLV_NRCELL_GET_ARFCN  0x12u /* value: count:u8, then count*[arfcn:u32,scs:u32] (8 bytes/entry) */
+#define TLV_NRCELL_GET_MULTI  0x13u /* presence-only marker -- qcom-cell-lock-test.c never decoded this TLV's contents for multi-PCI read-back, only reported that it was present; carried over identically, see jnr_cell_lock() */
+#define TLV_NRCELL_GET_GNB    0x14u /* value: count:u8, then count*gnb_id:u64, then an optional trailing id_bits:u8 */
+
+#define LTE_CELL_LOCK_MAX 16u      /* cap on decoded LTE cell-lock GET entries kept in state (the SET side only ever writes one) */
+#define NR_CELL_ARFCN_MAX 16u      /* cap on decoded NR ARFCN-list GET entries kept in state (the SET side only ever writes one) */
+#define NR_CELL_MULTI_PCI_MAX 64u  /* cap on multi-PCI SET request PCI list, matches qcom-cell-lock-test.c's own cap */
+#define NR_CELL_GNB_MAX 32u        /* cap on gNodeB allow-list SET/GET entries, matches qcom-cell-lock-test.c's own cap */
+
+#define DAEMON_VERSION "4.1.0"
+
 struct sockaddr_qrtr{u16 family,pad;u32 node,port;};
 struct qrtr_ctrl_pkt{u32 command,service,instance,node,port;};
 struct timeval64{s64 sec,usec;};
@@ -191,9 +291,52 @@ struct diag{
  int got_match;int send_failed;int timed_out;int skipped_count;
 };
 
+/* Result of probing whether this device/firmware accepts independent
+ * NR-SA (0x2F) / NR-NSA (0x30) SET writes, as opposed to only the combined
+ * NR mask (0x2B). See query_nr_independent_capability() for how this is
+ * populated -- ported from qcom-band-menu-compatibility.c's probe(). Each
+ * *_supported value is -1 (unknown/no data -- either the current mask
+ * wasn't present in the last GET, or the probe SET got no usable reply),
+ * 0 (modem replied with a non-zero TLV_RESULT -- rejected), or 1 (modem
+ * accepted the write). *_diag is a raw wire capture of that one probe
+ * transaction, independent of the general-purpose s->diag (which the next
+ * exchange() call after this, for anything else, will overwrite) --
+ * serialized only when verbose is on, same rule as s->diag. */
+struct nr_indep_probe{
+ int ran;
+ int sa_present,nsa_present;
+ int sa_supported,nsa_supported;
+ u16 sa_result,sa_error,nsa_result,nsa_error;
+ struct diag sa_diag,nsa_diag;
+};
+
+/* ── Cell lock state (v4.1.0, ported from qcom-cell-lock-test.c). ────────
+ * See the header's v4.1.0 note for the message/TLV layout this mirrors. */
+enum { NRCELL_TYPE_PCI=0, NRCELL_TYPE_ARFCN=1, NRCELL_TYPE_NONE=2, NRCELL_TYPE_MULTI=3, NRCELL_TYPE_GNB=4, NRCELL_TYPE_UNKNOWN=99 };
+
+struct lte_cell_entry{ u16 pci,earfcn; };
+struct lte_cell_lock{
+ int valid;
+ u32 count;
+ struct lte_cell_entry entries[LTE_CELL_LOCK_MAX];
+};
+
+struct nr_cell_pci{ u16 pci; u32 scs; u32 arfcn; u8 band_mask[64]; };
+struct nr_cell_arfcn_entry{ u32 arfcn,scs; };
+struct nr_cell_gnb{ u32 count; u64 ids[NR_CELL_GNB_MAX]; int have_id_bits; u32 id_bits; };
+struct nr_cell_lock{
+ int valid;
+ u32 type;                                    /* NRCELL_TYPE_* -- from TLV_NRCELL_GET_TYPE */
+ int have_pci; struct nr_cell_pci pci;         /* from TLV_NRCELL_GET_PCI */
+ int have_arfcn_list; u32 arfcn_count; struct nr_cell_arfcn_entry arfcn[NR_CELL_ARFCN_MAX]; /* from TLV_NRCELL_GET_ARFCN */
+ int have_multi_marker;                        /* TLV_NRCELL_GET_MULTI seen but not decoded -- matches source tool */
+ int have_gnb; struct nr_cell_gnb gnb;         /* from TLV_NRCELL_GET_GNB */
+};
+
 struct state{
  s64 fd;u32 node,port;int sim;u16 rat;
  u8 legacy[8],lte[8],extlte[32],sa[64],nsa[64];int valid;
+ int sa_present,nsa_present;
  u8 hw_legacy[8],hw_lte[32],hw_nr[64];int hw_valid;
  int nr_mode[2],nr_mode_known[2];
  char status[160];
@@ -201,6 +344,9 @@ struct state{
  struct opresult last_op;
  u32 last_rejected_bands[64];int last_rejected_count;char last_rejected_label[16];
  struct diag diag;
+ struct nr_indep_probe nr_cap;
+ struct lte_cell_lock lte_cell;
+ struct nr_cell_lock nr_cell;
 };
 
 static inline s64 sc1(s64 n,s64 a){register s64 x8 __asm__("x8")=n;register s64 x0 __asm__("x0")=a;__asm__ volatile("svc 0":"+r"(x0):"r"(x8):"memory");return x0;}
@@ -216,8 +362,11 @@ static void copy(void*d,const void*s,u64 n){u8*dd=d;const u8*ss=s;while(n--)*dd+
 static int eq(const char*a,const char*b){while(*a&&*b&&*a==*b){a++;b++;}return *a==*b;}
 static int starts(const char*s,const char*p){while(*p)if(*s++!=*p++)return 0;return 1;}
 static u16 le16(const u8*p){return (u16)p[0]|((u16)p[1]<<8);}
+static u32 le32(const u8*p){return (u32)p[0]|((u32)p[1]<<8)|((u32)p[2]<<16)|((u32)p[3]<<24);}
 static u64 le64(const u8*p){return (u64)p[0]|((u64)p[1]<<8)|((u64)p[2]<<16)|((u64)p[3]<<24)|((u64)p[4]<<32)|((u64)p[5]<<40)|((u64)p[6]<<48)|((u64)p[7]<<56);}
 static void put16(u8*p,u16 v){p[0]=(u8)v;p[1]=(u8)(v>>8);}
+static void put32(u8*p,u32 v){p[0]=(u8)v;p[1]=(u8)(v>>8);p[2]=(u8)(v>>16);p[3]=(u8)(v>>24);}
+static void put64(u8*p,u64 v){int i;for(i=0;i<8;i++){p[i]=(u8)v;v>>=8;}}
 static void setstatus(struct state*s,const char*x){u64 i=0;while(x[i]&&i+1<sizeof(s->status)){s->status[i]=x[i];i++;}s->status[i]=0;}
 /* Daemon-startup diagnostics only (before any client is connected -- there
  * is no JSON response channel yet to report a NAS-open/SIM-bind failure
@@ -328,6 +477,19 @@ static int json_get_int_array(const char*j,const char*key,u32*out,int cap){
   {u32 n=0;while(*v>='0'&&*v<='9'){n=n*10u+(u32)(*v-'0');v++;}if(c<cap)out[c++]=n;else return -1;}
  }
 }
+/* Same as json_get_int_array() but for u64 elements -- gNodeB identifiers
+ * (nr_cell_lock_gnb_set's "gnb_ids") aren't guaranteed to fit in 32 bits. */
+static int json_get_int_array_u64(const char*j,const char*key,u64*out,int cap){
+ const char*v=json_find(j,key);int c=0;
+ if(!v||*v!='[')return -1;
+ v++;
+ for(;;){
+  while(*v==' '||*v=='\t'||*v=='\n'||*v=='\r'||*v==',')v++;
+  if(*v==']')return c;
+  if(!(*v>='0'&&*v<='9'))return -1;
+  {u64 n=0;while(*v>='0'&&*v<='9'){n=n*10ull+(u64)(*v-'0');v++;}if(c<cap)out[c++]=n;else return -1;}
+ }
+}
 static void build_csv_from_array(char*buf,u32 cap,const u32*v,int c){
  u32 pos=0;int i;
  for(i=0;i<c;i++){
@@ -416,7 +578,7 @@ static int parse_result(const u8*r,u32 n,u16*result,u16*error){
 }
 static int result_ok(const u8*r,u32 n){u16 res=0,err=0;if(!parse_result(r,n,&res,&err))return 0;return res==0;}
 static int bind_sim(struct state*s,int sim){u8 p[4]={1,1,0,0},r[128];u32 n;p[3]=(u8)(sim-1);if(!exchange(s,MSG_BIND,p,4,r,sizeof(r),&n)||!result_ok(r,n)){setstatus(s,"SIM bind failed.");return 0;}s->sim=sim;return 1;}
-static int query(struct state*s){u8 r[2048];u32 n,p,e;zero(s->legacy,8);zero(s->lte,8);zero(s->extlte,32);zero(s->sa,64);zero(s->nsa,64);s->rat=0;if(!exchange(s,MSG_GET,0,0,r,sizeof(r),&n)||!result_ok(r,n)){s->valid=0;setstatus(s,"State query failed.");return 0;}e=7u+le16(r+5);if(e>n)e=n;for(p=7;p+3<=e;){u8 id=r[p];u16 l=le16(r+p+1);const u8*v=r+p+3;if(p+3u+l>e)break;if(id==TLV_MODE&&l>=2)s->rat=le16(v);else if(id==TLV_LEGACY&&l==8)copy(s->legacy,v,8);else if(id==TLV_LTE&&l==8)copy(s->lte,v,8);else if(id==TLV_EXT_LTE_GET&&l==32)copy(s->extlte,v,32);else if(id==TLV_NR_SA_GET&&l==64)copy(s->sa,v,64);else if(id==TLV_NR_NSA_GET&&l==64)copy(s->nsa,v,64);
+static int query(struct state*s){u8 r[2048];u32 n,p,e;zero(s->legacy,8);zero(s->lte,8);zero(s->extlte,32);zero(s->sa,64);zero(s->nsa,64);s->sa_present=0;s->nsa_present=0;s->rat=0;if(!exchange(s,MSG_GET,0,0,r,sizeof(r),&n)||!result_ok(r,n)){s->valid=0;setstatus(s,"State query failed.");return 0;}e=7u+le16(r+5);if(e>n)e=n;for(p=7;p+3<=e;){u8 id=r[p];u16 l=le16(r+p+1);const u8*v=r+p+3;if(p+3u+l>e)break;if(id==TLV_MODE&&l>=2)s->rat=le16(v);else if(id==TLV_LEGACY&&l==8)copy(s->legacy,v,8);else if(id==TLV_LTE&&l==8)copy(s->lte,v,8);else if(id==TLV_EXT_LTE_GET&&l==32)copy(s->extlte,v,32);else if(id==TLV_NR_SA_GET&&l==64){copy(s->sa,v,64);s->sa_present=1;}else if(id==TLV_NR_NSA_GET&&l==64){copy(s->nsa,v,64);s->nsa_present=1;}
  /* Confirmed by a live capture (mode sa/nsa/both, each followed by a GET):
     on GET, id 0x2B ("NR_COMBINED" -- the same id the "nr" command uses on
     SET for a 64-byte combined band mask) is reused for a 4-byte current
@@ -464,6 +626,76 @@ static int query_hardware(struct state*s){
  }
  s->hw_valid=1;return 1;
 }
+
+/* ── Cell lock GET queries (v4.1.0). Independent of query()/query_hardware()
+ * above -- separate messages, separate TLV namespace (see header note). */
+static int query_lte_cell_lock(struct state*s){
+ u8 r[2048];u32 n,p,e;u16 res=0,err=0;
+ s->lte_cell.valid=0;s->lte_cell.count=0;
+ if(!exchange(s,MSG_LTE_CELL_LOCK_GET,0,0,r,sizeof(r),&n)){setstatus(s,"LTE cell-lock query failed: no reply.");return 0;}
+ if(!parse_result(r,n,&res,&err)||res){setstatus(s,"LTE cell-lock query failed.");return 0;}
+ e=7u+le16(r+5);if(e>n)e=n;
+ for(p=7;p+3<=e;){
+  u8 id=r[p];u16 l=le16(r+p+1);const u8*v=r+p+3;
+  if(p+3u+l>e)break;
+  if(id==TLV_LTECELL_GET_LIST&&l>=1){
+   u32 c=v[0],off=1,i;
+   /* Entries are 4 bytes: PCI (le16) then EARFCN (le16). EARFCN is
+      genuinely truncated to 16 bits here -- see the v4.1.0 header note. */
+   for(i=0;i<c&&off+4<=l&&s->lte_cell.count<LTE_CELL_LOCK_MAX;i++,off+=4){
+    s->lte_cell.entries[s->lte_cell.count].pci=le16(v+off);
+    s->lte_cell.entries[s->lte_cell.count].earfcn=le16(v+off+2);
+    s->lte_cell.count++;
+   }
+  }
+  p+=3u+l;
+ }
+ s->lte_cell.valid=1;return 1;
+}
+static int query_nr_cell_lock(struct state*s){
+ u8 r[4096];u32 n,p,e;u16 res=0,err=0;
+ zero(&s->nr_cell,sizeof(s->nr_cell));
+ s->nr_cell.type=NRCELL_TYPE_UNKNOWN;
+ if(!exchange(s,MSG_NR_CELL_LOCK_GET,0,0,r,sizeof(r),&n)){setstatus(s,"NR cell-lock query failed: no reply.");return 0;}
+ if(!parse_result(r,n,&res,&err)||res){setstatus(s,"NR cell-lock query failed.");return 0;}
+ e=7u+le16(r+5);if(e>n)e=n;
+ for(p=7;p+3<=e;){
+  u8 id=r[p];u16 l=le16(r+p+1);const u8*v=r+p+3;
+  if(p+3u+l>e)break;
+  if(id==TLV_NRCELL_GET_TYPE&&l>=4){
+   s->nr_cell.type=le32(v);
+  } else if(id==TLV_NRCELL_GET_PCI&&l>=74){
+   s->nr_cell.have_pci=1;
+   s->nr_cell.pci.pci=le16(v);
+   s->nr_cell.pci.scs=le32(v+2);
+   s->nr_cell.pci.arfcn=le32(v+6);
+   copy(s->nr_cell.pci.band_mask,v+10,64);
+  } else if(id==TLV_NRCELL_GET_ARFCN&&l>=1){
+   u32 c=v[0],off=1,i;
+   s->nr_cell.have_arfcn_list=1;
+   for(i=0;i<c&&off+8<=l&&s->nr_cell.arfcn_count<NR_CELL_ARFCN_MAX;i++,off+=8){
+    s->nr_cell.arfcn[s->nr_cell.arfcn_count].arfcn=le32(v+off);
+    s->nr_cell.arfcn[s->nr_cell.arfcn_count].scs=le32(v+off+4);
+    s->nr_cell.arfcn_count++;
+   }
+  } else if(id==TLV_NRCELL_GET_MULTI&&l>=1){
+   /* Presence-only, not decoded -- matches qcom-cell-lock-test.c, which
+      never parsed this TLV's contents either. */
+   s->nr_cell.have_multi_marker=1;
+  } else if(id==TLV_NRCELL_GET_GNB&&l>=2){
+   u32 c=v[0],off=1,i;
+   s->nr_cell.have_gnb=1;
+   for(i=0;i<c&&off+8<=l&&s->nr_cell.gnb.count<NR_CELL_GNB_MAX;i++,off+=8){
+    s->nr_cell.gnb.ids[s->nr_cell.gnb.count]=le64(v+off);
+    s->nr_cell.gnb.count++;
+   }
+   if(off<l){s->nr_cell.gnb.have_id_bits=1;s->nr_cell.gnb.id_bits=v[off];}
+  }
+  p+=3u+l;
+ }
+ s->nr_cell.valid=1;return 1;
+}
+
 static int hw_gsm_has(const struct state*s,u32 b){u64 m=le64(s->hw_legacy);if(b==850)return(m&(1ULL<<19))!=0;if(b==900)return(m&((1ULL<<8)|(1ULL<<9)))!=0;if(b==1800)return(m&(1ULL<<7))!=0;if(b==1900)return(m&(1ULL<<21))!=0;return 0;}
 static int hw_wcdma_has(const struct state*s,u32 b){int bit=wbit(b);return bit>=0&&(le64(s->hw_legacy)&(1ULL<<bit))!=0;}
 
@@ -489,11 +721,19 @@ static int addtlv(u8*p,int pos,u8 id,const u8*v,u16 l){int i;p[pos++]=id;put16(p
  * error=0x.." to a terminal, the exact same result/error codes are stored
  * into s->last_op for the JSON "error.result"/"error.code" fields. The
  * three-way outcome (no reply / malformed reply / modem said no) is
- * unchanged; setstatus() text is unchanged too. */
-static int setter(struct state*s,const u8*p,u16 l){
+ * unchanged; setstatus() text is unchanged too.
+ *
+ * v4.1.0: split into setter_msg() (takes the QMI message id) + setter()
+ * (the original band-family-only entry point, now just
+ * setter_msg(s,MSG_SET,...)) so the v4.1.0 cell-lock SET functions --
+ * which use their own message ids, MSG_LTE_CELL_LOCK_SET/MSG_NR_CELL_LOCK_SET
+ * -- get the same result-handling/last_op/status behavior without
+ * duplicating it. Every existing call site (all of which called
+ * setter(), unchanged) behaves identically to before. */
+static int setter_msg(struct state*s,u16 msg,const u8*p,u16 l){
  u8 r[256];u32 n;
  zero(&s->last_op,sizeof(s->last_op));
- if(!exchange(s,MSG_SET,p,l,r,sizeof(r),&n)){
+ if(!exchange(s,msg,p,l,r,sizeof(r),&n)){
   setstatus(s,"Command failed: no reply.");
   return 0;
  }
@@ -511,12 +751,19 @@ static int setter(struct state*s,const u8*p,u16 l){
  setstatus(s,"Command accepted.");
  return 1;
 }
+static int setter(struct state*s,const u8*p,u16 l){return setter_msg(s,MSG_SET,p,l);}
 
 static int sep(char c){return c==','||c==' '||c=='\t';}
 static int puint(const char*s,u32*v){u32 n=0;int d=0;while(*s){if(*s<'0'||*s>'9')return 0;n=n*10u+(u32)(*s-'0');if(n>10000)return 0;s++;d++;}*v=n;return d>0;}
 static int plist(char*s,u32*v,int cap,u32 min,u32 max){int c=0;char*p=s,*a;u32 x;while(*p){while(*p&&sep(*p))p++;if(!*p)break;a=p;while(*p&&!sep(*p))p++;if(*p)*p++=0;if(!puint(a,&x)||x<min||x>max||c>=cap)return -1;v[c++]=x;}return c;}
 static void mset(u8*m,u32 b){u32 x=b-1;m[x/8]|=(u8)(1u<<(x%8));}
 static int mhas(const u8*m,u32 b){u32 x=b-1;return (m[x/8]&(u8)(1u<<(x%8)))!=0;}
+/* NR subcarrier spacing <-> the wire enum used by TLV_NRCELL_*_PCI/ARFCN.
+ * The app-facing JSON fields always use plain kHz integers (15/30/60/120/
+ * 240); these convert to/from the 0-4 enum the modem actually expects,
+ * ported from qcom-cell-lock-test.c's scs_enum()/scs_name(). */
+static int scs_enum_from_khz(u32 khz,u32*e){switch(khz){case 15:*e=0;return 1;case 30:*e=1;return 1;case 60:*e=2;return 1;case 120:*e=3;return 1;case 240:*e=4;return 1;}return 0;}
+static u32 scs_khz_from_enum(u32 e){switch(e){case 0:return 15;case 1:return 30;case 2:return 60;case 3:return 120;case 4:return 240;default:return 0;}}
 
 static int cmd_rat(struct state*s,char*a){u8 p[16],d=1,m[2];int pos=0;u16 mask=0;if(eq(a,"auto"))mask=0xFF;else{char*x=a,*z;while(*x){while(*x&&sep(*x))x++;if(!*x)break;z=x;while(*x&&!sep(*x))x++;if(*x)*x++=0;if(eq(z,"gsm"))mask|=4;else if(eq(z,"wcdma")||eq(z,"umts"))mask|=8;else if(eq(z,"lte"))mask|=16;else if(eq(z,"nr")||eq(z,"nr5g"))mask|=64;else{setstatus(s,"Invalid RAT token.");return 0;}}if(!mask)return 0;}m[0]=(u8)mask;m[1]=(u8)(mask>>8);pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_MODE,m,2);return setter(s,p,(u16)pos);}
 static int cmd_lte_hardware(struct state*s){
@@ -664,6 +911,167 @@ static int reopen_bound(struct state*s,int sim){
  return 1;
 }
 
+/* ── NR independent SA/NSA band-lock capability probe ────────────────────
+ * Ported from qcom-band-menu-compatibility.c's probe()/query_nr_state().
+ * Sends TLV_DURATION(1) + the *current* 64-byte mask (as last read back
+ * via GET TLV 0x2C/0x2D) through the independent SET id (0x2F for SA,
+ * 0x30 for NSA). Since the mask written back is identical to the one
+ * already active, this cannot change what's locked -- a modem that
+ * accepts the write just re-applies its existing state; a modem that
+ * doesn't support independent locking rejects it with a TLV_RESULT
+ * failure (result=1/error=1 on the device this was captured from), same
+ * as any other unsupported write id. Only whether the write is *accepted*
+ * is new information here.
+ *
+ * Deliberately uses exchange()/parse_result() directly instead of
+ * setter(), because this is a diagnostic probe, not a user-issued command:
+ * it must not disturb s->last_op (which build_response() uses to describe
+ * the outcome of the request the app actually asked for) and it needs to
+ * keep the SA and NSA wire captures separate instead of letting the
+ * second probe's exchange() overwrite the first's in s->diag. */
+static int nr_indep_probe_one(struct state*s,u8 set_id,const u8*mask,u16*out_result,u16*out_error,struct diag*out_diag){
+ u8 p[80],r[256],d=1;u32 n;int pos=0;
+ pos=addtlv(p,pos,TLV_DURATION,&d,1);
+ pos=addtlv(p,pos,set_id,mask,64);
+ *out_result=0;*out_error=0;
+ if(!exchange(s,MSG_SET,p,(u16)pos,r,sizeof(r),&n)){*out_diag=s->diag;return -1;}
+ *out_diag=s->diag;
+ if(!parse_result(r,n,out_result,out_error))return -1;
+ return (*out_result==0)?1:0;
+}
+/* Runs (or re-runs) the capability probe and stores the result in
+ * s->nr_cap for serialization (see jcapability()). Requires a current,
+ * valid GET snapshot to know what mask to resend -- refreshes via query()
+ * first if the state isn't already valid. Returns 0 only if that GET
+ * itself fails (no modem reply at all); an individual SA or NSA probe
+ * being rejected, or its current mask simply not being present on this
+ * device, is recorded as data, not a daemon failure. This is a real SET
+ * transaction to the modem, so callers should not run it on every query
+ * -- it runs once automatically at daemon startup (see run()) and
+ * otherwise only on an explicit "query_nr_independent_capability" request. */
+static int query_nr_independent_capability(struct state*s){
+ zero(&s->nr_cap,sizeof(s->nr_cap));
+ s->nr_cap.ran=1;
+ if(!s->valid&&!query(s))return 0;
+ s->nr_cap.sa_present=s->sa_present;
+ s->nr_cap.nsa_present=s->nsa_present;
+ s->nr_cap.sa_supported=s->sa_present?nr_indep_probe_one(s,TLV_NR_SA_SET,s->sa,&s->nr_cap.sa_result,&s->nr_cap.sa_error,&s->nr_cap.sa_diag):-1;
+ s->nr_cap.nsa_supported=s->nsa_present?nr_indep_probe_one(s,TLV_NR_NSA_SET,s->nsa,&s->nr_cap.nsa_result,&s->nr_cap.nsa_error,&s->nr_cap.nsa_diag):-1;
+ setstatus(s,"NR independent SA/NSA band-lock capability probed.");
+ return 1;
+}
+
+/* ── Cell lock SET commands (v4.1.0), ported from qcom-cell-lock-test.c's
+ * set_lte()/clear_lte()/nr_unlock()/nr_arfcn()/nr_pci()/nr_multi()/nr_gnb().
+ * Every TLV id, length, and byte layout below is carried over unchanged --
+ * see the TLV_LTECELL_ and TLV_NRCELL_ defines and the v4.1.0 header note.
+ * Each function refreshes the corresponding cell-lock state (via
+ * query_lte_cell_lock()/query_nr_cell_lock()) immediately after a
+ * successful write, the same "update state directly, skip the generic
+ * post-SET query()" pattern cmd_gsm_hardware()/cmd_wcdma_hardware() etc.
+ * already use elsewhere in this file -- do_command() sets *did_set=0 for
+ * all of these so serve_client() doesn't also fire the unrelated general
+ * GET (message 0x0034) afterward. */
+static int cmd_lte_cell_lock_set(struct state*s,u32 earfcn,u32 pci){
+ u8 val[7],apply=1,p[14];int pos=0;
+ val[0]=1;put16(val+1,(u16)pci);put32(val+3,earfcn);
+ pos=addtlv(p,pos,TLV_LTECELL_SET_LOCK,val,7);
+ pos=addtlv(p,pos,TLV_LTECELL_SET_APPLY,&apply,1);
+ if(!setter_msg(s,MSG_LTE_CELL_LOCK_SET,p,(u16)pos))return 0;
+ query_lte_cell_lock(s);
+ return 1;
+}
+static int cmd_lte_cell_lock_clear(struct state*s){
+ u8 val=0,apply=1,p[8];int pos=0;
+ pos=addtlv(p,pos,TLV_LTECELL_SET_LOCK,&val,1);
+ pos=addtlv(p,pos,TLV_LTECELL_SET_APPLY,&apply,1);
+ if(!setter_msg(s,MSG_LTE_CELL_LOCK_SET,p,(u16)pos))return 0;
+ query_lte_cell_lock(s);
+ return 1;
+}
+static int cmd_nr_cell_lock_pci_set(struct state*s,u32 arfcn,u32 pci,u32 scs_enum,u32 band){
+ u8 tval[4],pval[74],m[64],p[84];int pos=0;u32 x=band-1;
+ zero(m,64);m[x/8]|=(u8)(1u<<(x%8));
+ put32(tval,NRCELL_TYPE_PCI);
+ pos=addtlv(p,pos,TLV_NRCELL_SET_TYPE,tval,4);
+ put16(pval,(u16)pci);put32(pval+2,scs_enum);put32(pval+6,arfcn);copy(pval+10,m,64);
+ pos=addtlv(p,pos,TLV_NRCELL_SET_PCI,pval,74);
+ if(!setter_msg(s,MSG_NR_CELL_LOCK_SET,p,(u16)pos))return 0;
+ query_nr_cell_lock(s);
+ return 1;
+}
+static int cmd_nr_cell_lock_arfcn_set(struct state*s,u32 arfcn,u32 scs_enum){
+ u8 tval[4],aval[9],p[19];int pos=0;
+ put32(tval,NRCELL_TYPE_ARFCN);
+ pos=addtlv(p,pos,TLV_NRCELL_SET_TYPE,tval,4);
+ aval[0]=1;put32(aval+1,arfcn);put32(aval+5,scs_enum);
+ pos=addtlv(p,pos,TLV_NRCELL_SET_ARFCN,aval,9);
+ if(!setter_msg(s,MSG_NR_CELL_LOCK_SET,p,(u16)pos))return 0;
+ query_nr_cell_lock(s);
+ return 1;
+}
+/* Value layout: count:u8(1) + pci[]:u16*count(2 each) + scs_mask:u16(2) +
+ * arfcn:u32(4) + band_mask:64B(64) = 71 + 2*count bytes, maxed out at
+ * NR_CELL_MULTI_PCI_MAX entries. (mval was previously undersized here --
+ * fixed to the actual worst case, not a rough estimate.) */
+#define NRCELL_MULTI_VALLEN_MAX (1u+2u*NR_CELL_MULTI_PCI_MAX+2u+4u+64u)
+static int cmd_nr_cell_lock_multi_pci_set(struct state*s,u32 arfcn,u32 scs_enum,u32 band,const u32*pcis,u32 count){
+ u8 tval[4],mval[NRCELL_MULTI_VALLEN_MAX],p[7+3+NRCELL_MULTI_VALLEN_MAX],m[64];
+ u32 x=band-1,i,vlen;u16 scs_mask=(u16)(1u<<scs_enum);int pos=0;
+ if(count>NR_CELL_MULTI_PCI_MAX)return 0;
+ zero(m,64);m[x/8]|=(u8)(1u<<(x%8));
+ put32(tval,NRCELL_TYPE_MULTI);
+ pos=addtlv(p,pos,TLV_NRCELL_SET_TYPE,tval,4);
+ mval[0]=(u8)count;vlen=1;
+ for(i=0;i<count;i++){put16(mval+vlen,(u16)pcis[i]);vlen+=2;}
+ put16(mval+vlen,scs_mask);vlen+=2;
+ put32(mval+vlen,arfcn);vlen+=4;
+ copy(mval+vlen,m,64);vlen+=64;
+ pos=addtlv(p,pos,TLV_NRCELL_SET_MULTI,mval,(u16)vlen);
+ if(!setter_msg(s,MSG_NR_CELL_LOCK_SET,p,(u16)pos))return 0;
+ query_nr_cell_lock(s);
+ return 1;
+}
+static int cmd_nr_cell_lock_gnb_set(struct state*s,u32 id_bits,const u64*ids,u32 count){
+ u8 tval[4],gval[2+8*NR_CELL_GNB_MAX],p[7+3+2+8*NR_CELL_GNB_MAX];u32 i,vlen;int pos=0;
+ if(count>NR_CELL_GNB_MAX)return 0;
+ put32(tval,NRCELL_TYPE_GNB);
+ pos=addtlv(p,pos,TLV_NRCELL_SET_TYPE,tval,4);
+ gval[0]=(u8)count;vlen=1;
+ for(i=0;i<count;i++){put64(gval+vlen,ids[i]);vlen+=8;}
+ gval[vlen++]=(u8)id_bits;
+ pos=addtlv(p,pos,TLV_NRCELL_SET_GNB,gval,(u16)vlen);
+ if(!setter_msg(s,MSG_NR_CELL_LOCK_SET,p,(u16)pos))return 0;
+ query_nr_cell_lock(s);
+ return 1;
+}
+/* NR cell-lock clear -- v4.1.0 idempotent-clear behavior (see the header
+ * note): some/most firmware rejects a type=2 ("none") SET when there's
+ * no NR cell lock active, unlike LTE clear, which always succeeds. Since
+ * the requested end state is already true in that case, this reads the
+ * current lock type first and, if it's already NRCELL_TYPE_NONE, skips
+ * the write and reports synthetic success instead of surfacing a
+ * rejection the app has no useful action for. s->last_op is left zeroed
+ * in that path (no modem write happened), so build_response() correctly
+ * shows "error":null rather than any stage at all, since *ok comes back
+ * true. If a real SET is sent and the modem still rejects it, that
+ * rejection surfaces normally via last_op/"modem_rejected", same as any
+ * other command. */
+static int cmd_nr_cell_lock_clear(struct state*s){
+ u8 tval[4],p[7];int pos=0;
+ if(!s->nr_cell.valid&&!query_nr_cell_lock(s))return 0;
+ if(s->nr_cell.type==NRCELL_TYPE_NONE){
+  zero(&s->last_op,sizeof(s->last_op));
+  setstatus(s,"NR cell lock already clear; nothing to do.");
+  return 1;
+ }
+ put32(tval,NRCELL_TYPE_NONE);
+ pos=addtlv(p,pos,TLV_NRCELL_SET_TYPE,tval,4);
+ if(!setter_msg(s,MSG_NR_CELL_LOCK_SET,p,(u16)pos))return 0;
+ query_nr_cell_lock(s);
+ return 1;
+}
+
 /* ── Everything below is new: JSON state/diagnostics serialization, and
  * the socket/request-dispatch/response layer. ─────────────────────────── */
 
@@ -711,21 +1119,30 @@ static void jtlvs(char*b,u32*pos,u32 cap,const u8*r,u32 n){
  }
  jputc(b,pos,cap,']');
 }
-static void jdiagnostics(char*b,u32*pos,u32 cap,const struct state*s){
- if(!s->verbose||!s->diag.have){jput(b,pos,cap,"null");return;}
+/* Serializes one raw wire capture (tx/rx hex + decoded TLVs). Shared by
+ * the general per-request "diagnostics" field (jdiagnostics(), below,
+ * fed by s->diag) and the capability probe's own per-domain SA/NSA
+ * captures (jcap_domain(), fed by s->nr_cap.sa_diag/nsa_diag) -- both are
+ * gated on verbose mode by their respective callers, not by this function. */
+static void jdiag_dump(char*b,u32*pos,u32 cap,const struct diag*dg){
+ if(!dg->have){jput(b,pos,cap,"null");return;}
  jputc(b,pos,cap,'{');
  jput(b,pos,cap,"\"msg_id\":\"0x");
- {char h[5];h[0]="0123456789ABCDEF"[(s->diag.msg>>12)&0xf];h[1]="0123456789ABCDEF"[(s->diag.msg>>8)&0xf];h[2]="0123456789ABCDEF"[(s->diag.msg>>4)&0xf];h[3]="0123456789ABCDEF"[s->diag.msg&0xf];h[4]=0;jput(b,pos,cap,h);}
+ {char h[5];h[0]="0123456789ABCDEF"[(dg->msg>>12)&0xf];h[1]="0123456789ABCDEF"[(dg->msg>>8)&0xf];h[2]="0123456789ABCDEF"[(dg->msg>>4)&0xf];h[3]="0123456789ABCDEF"[dg->msg&0xf];h[4]=0;jput(b,pos,cap,h);}
  jput(b,pos,cap,"\",");
- jput(b,pos,cap,"\"request\":{\"hex\":\"");jhex_bytes(b,pos,cap,s->diag.tx,s->diag.tx_len);jput(b,pos,cap,"\",\"tlvs\":");jtlvs(b,pos,cap,s->diag.tx,s->diag.tx_len);jputc(b,pos,cap,'}');
+ jput(b,pos,cap,"\"request\":{\"hex\":\"");jhex_bytes(b,pos,cap,dg->tx,dg->tx_len);jput(b,pos,cap,"\",\"tlvs\":");jtlvs(b,pos,cap,dg->tx,dg->tx_len);jputc(b,pos,cap,'}');
  jput(b,pos,cap,",\"response\":");
- if(s->diag.rx_len){
-  jput(b,pos,cap,"{\"hex\":\"");jhex_bytes(b,pos,cap,s->diag.rx,s->diag.rx_len);jput(b,pos,cap,"\",\"matched\":");jbool(b,pos,cap,s->diag.got_match);jput(b,pos,cap,",\"tlvs\":");jtlvs(b,pos,cap,s->diag.rx,s->diag.rx_len);jputc(b,pos,cap,'}');
+ if(dg->rx_len){
+  jput(b,pos,cap,"{\"hex\":\"");jhex_bytes(b,pos,cap,dg->rx,dg->rx_len);jput(b,pos,cap,"\",\"matched\":");jbool(b,pos,cap,dg->got_match);jput(b,pos,cap,",\"tlvs\":");jtlvs(b,pos,cap,dg->rx,dg->rx_len);jputc(b,pos,cap,'}');
  } else jput(b,pos,cap,"null");
- jput(b,pos,cap,",\"send_failed\":");jbool(b,pos,cap,s->diag.send_failed);
- jput(b,pos,cap,",\"timed_out\":");jbool(b,pos,cap,s->diag.timed_out);
- jput(b,pos,cap,",\"skipped_count\":");jint(b,pos,cap,(u32)s->diag.skipped_count);
+ jput(b,pos,cap,",\"send_failed\":");jbool(b,pos,cap,dg->send_failed);
+ jput(b,pos,cap,",\"timed_out\":");jbool(b,pos,cap,dg->timed_out);
+ jput(b,pos,cap,",\"skipped_count\":");jint(b,pos,cap,(u32)dg->skipped_count);
  jputc(b,pos,cap,'}');
+}
+static void jdiagnostics(char*b,u32*pos,u32 cap,const struct state*s){
+ if(!s->verbose){jput(b,pos,cap,"null");return;}
+ jdiag_dump(b,pos,cap,&s->diag);
 }
 
 static void jrat(char*b,u32*pos,u32 cap,u16 m){
@@ -786,6 +1203,111 @@ static void jwcdma_effective(char*b,u32*pos,u32 cap,const struct state*s){
  for(i=0;i<8;i++)x[i]=(u8)(s->legacy[i]&s->hw_legacy[i]);
  jwcdma(b,pos,cap,x);
 }
+/* present=0 means this device's last GET didn't include that domain's
+ * mask at all (nothing to probe with -- genuinely unknown, not tested).
+ * supported<0 means a probe was attempted but got no usable reply
+ * (transport failure, not a modem decision) -- also reported as unknown
+ * rather than guessed as either true or false. */
+static void jcap_domain(char*b,u32*pos,u32 cap,const struct state*s,int present,int supported,u16 result,u16 error,const struct diag*dg){
+ jputc(b,pos,cap,'{');
+ jput(b,pos,cap,"\"present\":");jbool(b,pos,cap,present);
+ jput(b,pos,cap,",\"supported\":");
+ if(!present||supported<0)jput(b,pos,cap,"null");else jbool(b,pos,cap,supported>0);
+ jput(b,pos,cap,",\"result\":");jint(b,pos,cap,result);
+ jput(b,pos,cap,",\"code\":");jint(b,pos,cap,error);
+ if(s->verbose){jput(b,pos,cap,",\"diagnostics\":");jdiag_dump(b,pos,cap,dg);}
+ jputc(b,pos,cap,'}');
+}
+/* Top-level summary the app is expected to actually gate its UI on:
+ * "independent_lock_supported" is true only if BOTH the SA and NSA probes
+ * were run, had a mask to test, and were accepted by the modem; false
+ * only if both were run and at least one was actively rejected; null in
+ * every other (untested/inconclusive) case, so the app is never told
+ * "false" (and doesn't hide/disable per-domain controls) on a device that
+ * simply hasn't been probed yet or gave an ambiguous answer. */
+static void jcapability(char*b,u32*pos,u32 cap,const struct state*s){
+ const struct nr_indep_probe*c=&s->nr_cap;
+ jputc(b,pos,cap,'{');
+ jput(b,pos,cap,"\"checked\":");jbool(b,pos,cap,c->ran);
+ jput(b,pos,cap,",\"sa\":");jcap_domain(b,pos,cap,s,c->sa_present,c->sa_supported,c->sa_result,c->sa_error,&c->sa_diag);
+ jput(b,pos,cap,",\"nsa\":");jcap_domain(b,pos,cap,s,c->nsa_present,c->nsa_supported,c->nsa_result,c->nsa_error,&c->nsa_diag);
+ jput(b,pos,cap,",\"independent_lock_supported\":");
+ if(!c->ran||!c->sa_present||!c->nsa_present||c->sa_supported<0||c->nsa_supported<0)jput(b,pos,cap,"null");
+ else jbool(b,pos,cap,c->sa_supported>0&&c->nsa_supported>0);
+ jputc(b,pos,cap,'}');
+}
+
+/* jint()'s sibling for u64 values (gNodeB identifiers). */
+static void jint64(char*b,u32*pos,u32 cap,u64 v){
+ char t[21];int n=0,i;
+ if(!v){jputc(b,pos,cap,'0');return;}
+ while(v){t[n++]=(char)('0'+(int)(v%10));v/=10;}
+ for(i=n-1;i>=0;i--)jputc(b,pos,cap,t[i]);
+}
+static const char*nrcell_type_name(u32 t){
+ switch(t){
+  case NRCELL_TYPE_PCI:return "pci";
+  case NRCELL_TYPE_ARFCN:return "arfcn";
+  case NRCELL_TYPE_NONE:return "none";
+  case NRCELL_TYPE_MULTI:return "multi_pci";
+  case NRCELL_TYPE_GNB:return "gnb_allowlist";
+  default:return "unknown";
+ }
+}
+static void jlte_cell_lock(char*b,u32*pos,u32 cap,const struct state*s){
+ u32 i;
+ jputc(b,pos,cap,'{');
+ jput(b,pos,cap,"\"valid\":");jbool(b,pos,cap,s->lte_cell.valid);
+ jput(b,pos,cap,",\"locks\":[");
+ for(i=0;i<s->lte_cell.count;i++){
+  if(i)jputc(b,pos,cap,',');
+  jput(b,pos,cap,"{\"pci\":");jint(b,pos,cap,s->lte_cell.entries[i].pci);
+  jput(b,pos,cap,",\"earfcn\":");jint(b,pos,cap,s->lte_cell.entries[i].earfcn);
+  jputc(b,pos,cap,'}');
+ }
+ jput(b,pos,cap,"]}");
+}
+static void jnr_cell_lock(char*b,u32*pos,u32 cap,const struct state*s){
+ const struct nr_cell_lock*c=&s->nr_cell;u32 i;
+ jputc(b,pos,cap,'{');
+ jput(b,pos,cap,"\"valid\":");jbool(b,pos,cap,c->valid);
+ jput(b,pos,cap,",\"type\":");jstr(b,pos,cap,nrcell_type_name(c->type));
+ jput(b,pos,cap,",\"type_raw\":");jint(b,pos,cap,c->type);
+ jput(b,pos,cap,",\"pci_lock\":");
+ if(c->have_pci){
+  jputc(b,pos,cap,'{');
+  jput(b,pos,cap,"\"pci\":");jint(b,pos,cap,c->pci.pci);
+  jput(b,pos,cap,",\"scs_khz\":");jint(b,pos,cap,scs_khz_from_enum(c->pci.scs));
+  jput(b,pos,cap,",\"arfcn\":");jint(b,pos,cap,c->pci.arfcn);
+  jput(b,pos,cap,",\"bands\":");jbandmask(b,pos,cap,c->pci.band_mask,512);
+  jputc(b,pos,cap,'}');
+ } else jput(b,pos,cap,"null");
+ jput(b,pos,cap,",\"arfcn_lock\":");
+ if(c->have_arfcn_list){
+  jputc(b,pos,cap,'[');
+  for(i=0;i<c->arfcn_count;i++){
+   if(i)jputc(b,pos,cap,',');
+   jput(b,pos,cap,"{\"arfcn\":");jint(b,pos,cap,c->arfcn[i].arfcn);
+   jput(b,pos,cap,",\"scs_khz\":");jint(b,pos,cap,scs_khz_from_enum(c->arfcn[i].scs));
+   jputc(b,pos,cap,'}');
+  }
+  jputc(b,pos,cap,']');
+ } else jput(b,pos,cap,"null");
+ jput(b,pos,cap,",\"multi_pci_lock\":");
+ if(c->have_multi_marker)jput(b,pos,cap,"{\"present\":true}");
+ else jput(b,pos,cap,"null");
+ jput(b,pos,cap,",\"gnb_allowlist\":");
+ if(c->have_gnb){
+  jputc(b,pos,cap,'{');
+  jput(b,pos,cap,"\"gnb_ids\":[");
+  for(i=0;i<c->gnb.count;i++){if(i)jputc(b,pos,cap,',');jint64(b,pos,cap,c->gnb.ids[i]);}
+  jputc(b,pos,cap,']');
+  jput(b,pos,cap,",\"id_bits\":");
+  if(c->gnb.have_id_bits)jint(b,pos,cap,c->gnb.id_bits);else jput(b,pos,cap,"null");
+  jputc(b,pos,cap,'}');
+ } else jput(b,pos,cap,"null");
+ jputc(b,pos,cap,'}');
+}
 static void jstate(char*b,u32*pos,u32 cap,struct state*s){
  jputc(b,pos,cap,'{');
  jput(b,pos,cap,"\"valid\":");jbool(b,pos,cap,s->valid);
@@ -810,6 +1332,9 @@ static void jstate(char*b,u32*pos,u32 cap,struct state*s){
   jput(b,pos,cap,",\"nr\":");jbandmask(b,pos,cap,s->hw_nr,512);
   jputc(b,pos,cap,'}');
  } else jput(b,pos,cap,"null");
+ jput(b,pos,cap,",\"nr_independent_capability\":");jcapability(b,pos,cap,s);
+ jput(b,pos,cap,",\"lte_cell_lock\":");jlte_cell_lock(b,pos,cap,s);
+ jput(b,pos,cap,",\"nr_cell_lock\":");jnr_cell_lock(b,pos,cap,s);
  jput(b,pos,cap,",\"status\":");jstr(b,pos,cap,s->status);
  jputc(b,pos,cap,'}');
 }
@@ -840,6 +1365,20 @@ static void do_command(struct state*s,const char*req,int*ok,int*did_set,int*shut
   return;
  }
  if(eq(cmd,"query_hardware")){*ok=query_hardware(s);if(!*ok)set_stage(stage,stage_cap,"daemon");return;}
+ /* Runs the NR independent SA/NSA band-lock capability probe (see
+    query_nr_independent_capability() above). Also runs once automatically
+    at daemon startup -- this command exists so the app can re-check it
+    on its own launch (per-connection) without restarting the daemon, and
+    so it can force a re-check after e.g. a SIM swap if it wants one. */
+ if(eq(cmd,"query_nr_independent_capability")){*ok=query_nr_independent_capability(s);if(!*ok)set_stage(stage,stage_cap,"daemon");return;}
+ /* Cell lock (v4.1.0) GET refreshes -- independent of the general query()/
+    query_hardware() above; see the header's v4.1.0 note. */
+ if(eq(cmd,"query_lte_cell_lock")){*ok=query_lte_cell_lock(s);if(!*ok)set_stage(stage,stage_cap,"daemon");return;}
+ if(eq(cmd,"query_nr_cell_lock")){*ok=query_nr_cell_lock(s);if(!*ok)set_stage(stage,stage_cap,"daemon");return;}
+ /* No dedicated data beyond what's already in every response's top-level
+    "version" field; this just gives the app an explicit, self-describing
+    request/response round trip to check daemon compatibility with. */
+ if(eq(cmd,"version")){*ok=1;setstatus(s,"qcom-bandlockd v" DAEMON_VERSION);return;}
  if(eq(cmd,"shutdown")){*ok=1;*shutdown_req=1;setstatus(s,"Daemon shutting down.");return;}
  if(eq(cmd,"verbose_set")){
   int v;
@@ -871,6 +1410,55 @@ static void do_command(struct state*s,const char*req,int*ok,int*did_set,int*shut
    if(eq(cmd,"gsm_set")||eq(cmd,"wcdma_set"))*did_set=0;else *did_set=*ok;
   return;
  }
+ /* Cell lock (v4.1.0) SET/CLEAR commands. All validation ranges below
+    (PCI 0-503 for LTE / 0-1007 for NR, band 1-512, SCS one of 15/30/60/
+    120/240 kHz, gNodeB id_bits 22-32) mirror qcom-cell-lock-test.c's own
+    input validation exactly. These update lte_cell_lock/nr_cell_lock
+    directly on success (see the cmd_*_cell_lock_* functions), so
+    *did_set is left 0 -- the unrelated general GET (message 0x0034)
+    doesn't need to fire afterward. */
+ if(eq(cmd,"lte_cell_lock_set")){
+  s64 earfcn=0,pci=0;
+  if(!json_get_int(req,"earfcn",&earfcn)||earfcn<0){setstatus(s,"Missing/invalid 'earfcn' integer field.");set_stage(stage,stage_cap,"bad_request");return;}
+  if(!json_get_int(req,"pci",&pci)||pci<0||pci>503){setstatus(s,"Field 'pci' must be an integer 0-503.");set_stage(stage,stage_cap,"bad_request");return;}
+  *ok=cmd_lte_cell_lock_set(s,(u32)earfcn,(u32)pci);*did_set=0;return;
+ }
+ if(eq(cmd,"lte_cell_lock_clear")){*ok=cmd_lte_cell_lock_clear(s);*did_set=0;return;}
+ if(eq(cmd,"nr_cell_lock_pci_set")){
+  s64 arfcn=0,pci=0,scs_khz=0,band=0;u32 e;
+  if(!json_get_int(req,"arfcn",&arfcn)||arfcn<0){setstatus(s,"Missing/invalid 'arfcn' integer field.");set_stage(stage,stage_cap,"bad_request");return;}
+  if(!json_get_int(req,"pci",&pci)||pci<0||pci>1007){setstatus(s,"Field 'pci' must be an integer 0-1007.");set_stage(stage,stage_cap,"bad_request");return;}
+  if(!json_get_int(req,"scs_khz",&scs_khz)||!scs_enum_from_khz((u32)scs_khz,&e)){setstatus(s,"Field 'scs_khz' must be one of 15, 30, 60, 120, 240.");set_stage(stage,stage_cap,"bad_request");return;}
+  if(!json_get_int(req,"band",&band)||band<1||band>512){setstatus(s,"Field 'band' must be an integer 1-512.");set_stage(stage,stage_cap,"bad_request");return;}
+  *ok=cmd_nr_cell_lock_pci_set(s,(u32)arfcn,(u32)pci,e,(u32)band);*did_set=0;return;
+ }
+ if(eq(cmd,"nr_cell_lock_arfcn_set")){
+  s64 arfcn=0,scs_khz=0;u32 e;
+  if(!json_get_int(req,"arfcn",&arfcn)||arfcn<0){setstatus(s,"Missing/invalid 'arfcn' integer field.");set_stage(stage,stage_cap,"bad_request");return;}
+  if(!json_get_int(req,"scs_khz",&scs_khz)||!scs_enum_from_khz((u32)scs_khz,&e)){setstatus(s,"Field 'scs_khz' must be one of 15, 30, 60, 120, 240.");set_stage(stage,stage_cap,"bad_request");return;}
+  *ok=cmd_nr_cell_lock_arfcn_set(s,(u32)arfcn,e);*did_set=0;return;
+ }
+ if(eq(cmd,"nr_cell_lock_multi_pci_set")){
+  s64 arfcn=0,scs_khz=0,band=0;u32 e,pcis[NR_CELL_MULTI_PCI_MAX],i;int cnt;
+  if(!json_get_int(req,"arfcn",&arfcn)||arfcn<0){setstatus(s,"Missing/invalid 'arfcn' integer field.");set_stage(stage,stage_cap,"bad_request");return;}
+  if(!json_get_int(req,"scs_khz",&scs_khz)||!scs_enum_from_khz((u32)scs_khz,&e)){setstatus(s,"Field 'scs_khz' must be one of 15, 30, 60, 120, 240.");set_stage(stage,stage_cap,"bad_request");return;}
+  if(!json_get_int(req,"band",&band)||band<1||band>512){setstatus(s,"Field 'band' must be an integer 1-512.");set_stage(stage,stage_cap,"bad_request");return;}
+  cnt=json_get_int_array(req,"pci_list",pcis,(int)NR_CELL_MULTI_PCI_MAX);
+  if(cnt<=0){setstatus(s,"Field 'pci_list' must be a non-empty array of integers (max 64).");set_stage(stage,stage_cap,"bad_request");return;}
+  for(i=0;i<(u32)cnt;i++)if(pcis[i]>1007){setstatus(s,"Field 'pci_list' entries must each be 0-1007.");set_stage(stage,stage_cap,"bad_request");return;}
+  *ok=cmd_nr_cell_lock_multi_pci_set(s,(u32)arfcn,e,(u32)band,pcis,(u32)cnt);*did_set=0;return;
+ }
+ if(eq(cmd,"nr_cell_lock_gnb_set")){
+  s64 id_bits=0;u64 ids[NR_CELL_GNB_MAX];int cnt;
+  if(!json_get_int(req,"id_bits",&id_bits)||id_bits<22||id_bits>32){setstatus(s,"Field 'id_bits' must be an integer 22-32.");set_stage(stage,stage_cap,"bad_request");return;}
+  cnt=json_get_int_array_u64(req,"gnb_ids",ids,(int)NR_CELL_GNB_MAX);
+  if(cnt<=0){setstatus(s,"Field 'gnb_ids' must be a non-empty array of integers (max 32).");set_stage(stage,stage_cap,"bad_request");return;}
+  *ok=cmd_nr_cell_lock_gnb_set(s,(u32)id_bits,ids,(u32)cnt);*did_set=0;return;
+ }
+ /* No fields -- see the v4.1.0 header note / cmd_nr_cell_lock_clear() for
+    the idempotent-clear behavior when no NR cell lock is currently
+    active. */
+ if(eq(cmd,"nr_cell_lock_clear")){*ok=cmd_nr_cell_lock_clear(s);*did_set=0;return;}
  if(eq(cmd,"mode_set")){
   if(!json_get_string(req,"mode",arg,sizeof(arg))){setstatus(s,"Missing 'mode' string field (\"sa\"/\"nsa\"/\"both\").");set_stage(stage,stage_cap,"bad_request");return;}
   *ok=cmd_mode(s,arg);*did_set=*ok;return;
@@ -888,6 +1476,7 @@ static void build_response(struct state*s,const char*req,int ok,const char*expli
  jput(out,&pos,outcap,"\"id\":");
  if(have_id)jint(out,&pos,outcap,(u32)idv);else jput(out,&pos,outcap,"null");
  jput(out,&pos,outcap,",\"cmd\":");jstr(out,&pos,outcap,cmdbuf);
+ jput(out,&pos,outcap,",\"version\":");jstr(out,&pos,outcap,DAEMON_VERSION);
  jput(out,&pos,outcap,",\"ok\":");jbool(out,&pos,outcap,ok);
  jput(out,&pos,outcap,",\"error\":");
  if(ok)jput(out,&pos,outcap,"null");
@@ -1011,9 +1600,20 @@ static int run(int argc,char**argv){
  if(!have_uid){elog("qcom-bandlockd: -uid <peer_uid> is required (refusing to start without peer authentication).\n");return 1;}
 
  zero(&s,sizeof(s));s.fd=-1;s.sim=1;s.verbose=verbose_flag;setstatus(&s,"Starting...");
+ elog("qcom-bandlockd v" DAEMON_VERSION " starting.\n");
  if(!open_nas(&s)){elog("qcom-bandlockd: NAS discovery/open failed.\n");return 2;}
  if(!bind_sim(&s,1)){elog("qcom-bandlockd: SIM1 bind failed.\n");sc1(SYS_close,s.fd);return 3;}
- query(&s);(void)query_hardware(&s);setstatus(&s,"Ready.");
+ query(&s);(void)query_hardware(&s);
+ /* One-time NR independent SA/NSA capability probe on daemon spawn, so the
+    very first response the app gets already carries a real answer instead
+    of "checked":false -- see the v4.0.4 header note and
+    query_nr_independent_capability() above. */
+ (void)query_nr_independent_capability(&s);
+ /* Initial cell-lock reads (v4.1.0), same reasoning as above -- so the
+    first response already has real "lte_cell_lock"/"nr_cell_lock" data. */
+ (void)query_lte_cell_lock(&s);
+ (void)query_nr_cell_lock(&s);
+ setstatus(&s,"Ready.");
 
  if(!make_listen_socket(sockname,&listen_fd)){elog("qcom-bandlockd: failed to create/bind/listen on the abstract socket.\n");if(s.fd>=0)sc1(SYS_close,s.fd);return 4;}
 

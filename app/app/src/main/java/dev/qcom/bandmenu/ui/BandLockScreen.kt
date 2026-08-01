@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -72,7 +73,8 @@ fun BandLockScreen(
     onReset: () -> Unit,
     contentPadding: PaddingValues = PaddingValues(),
     snackbarHostState: SnackbarHostState,
-    backdrop: Backdrop? = null
+    backdrop: Backdrop? = null,
+    nrIndependentSupported: Boolean? = null
 ) {
     val simNumber = slot + 1
     val scrollState = rememberScrollState()
@@ -93,7 +95,10 @@ fun BandLockScreen(
     val lteChecked = remember { mutableStateMapOf<Int, Boolean>() }
     val nrNsaChecked = remember { mutableStateMapOf<Int, Boolean>() }
     val nrSaChecked = remember { mutableStateMapOf<Int, Boolean>() }
+    val nrChecked = remember { mutableStateMapOf<Int, Boolean>() }
     var nrMode by remember { mutableStateOf(NrMode.BOTH) }
+
+    val useIndependentLock = nrIndependentSupported == true
 
     LaunchedEffect(currentSimState, refreshKey) {
         currentSimState?.let { state ->
@@ -111,6 +116,9 @@ fun BandLockScreen(
             state.nrNsaBands.forEach { nrNsaChecked[it] = true }
             nrSaChecked.clear()
             state.nrSaBands.forEach { nrSaChecked[it] = true }
+            // Unified NR grid: union of SA and NSA bands
+            nrChecked.clear()
+            (state.nrNsaBands + state.nrSaBands).forEach { nrChecked[it] = true }
             nrMode = state.nrMode
         }
     }
@@ -190,18 +198,23 @@ fun BandLockScreen(
                         NrMode.SA -> 1
                         NrMode.NSA -> 2
                     }
+                    val nrModeEnabled = useIndependentLock
                     TabRowWithContour(
                         tabs = listOf("SA/NSA", "SA", "NSA"),
                         selectedTabIndex = nrModeIndex,
                         onTabSelected = { index ->
-                            nrMode = when (index) {
-                                0 -> NrMode.BOTH
-                                1 -> NrMode.SA
-                                2 -> NrMode.NSA
-                                else -> NrMode.BOTH
+                            if (nrModeEnabled) {
+                                nrMode = when (index) {
+                                    0 -> NrMode.BOTH
+                                    1 -> NrMode.SA
+                                    2 -> NrMode.NSA
+                                    else -> NrMode.BOTH
+                                }
                             }
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(if (nrModeEnabled) Modifier else Modifier.alpha(0.4f))
                     )
                 }
 
@@ -209,13 +222,17 @@ fun BandLockScreen(
                 SmallTitle("Band lock")
                 Spacer(modifier = Modifier.height(4.dp))
 
-                val allNsaEnabled = hardware.nr.all { nrNsaChecked[it] == true }
-                val allSaEnabled = hardware.nr.all { nrSaChecked[it] == true }
+                val allNrEnabled = if (useIndependentLock)
+                    hardware.nr.all { nrNsaChecked[it] == true } && hardware.nr.all { nrSaChecked[it] == true }
+                else
+                    hardware.nr.all { nrChecked[it] == true }
+                val allNsaEnabled = if (useIndependentLock) hardware.nr.all { nrNsaChecked[it] == true } else allNrEnabled
+                val allSaEnabled = if (useIndependentLock) hardware.nr.all { nrSaChecked[it] == true } else allNrEnabled
                 val allLteEnabled = hardware.lte.all { lteChecked[it] == true }
                 val allWcdmaEnabled = hardware.wcdma.all { wcdmaChecked[it] == true }
                 val allGsmEnabled = hardware.gsm.all { gsmChecked[it] == true }
-                val all5gEnabled = allNsaEnabled && allSaEnabled
-                val allBandsEnabled = allGsmEnabled && allWcdmaEnabled && allLteEnabled && allNsaEnabled && allSaEnabled
+                val all5gEnabled = allNrEnabled
+                val allBandsEnabled = allGsmEnabled && allWcdmaEnabled && allLteEnabled && allNrEnabled
 
                 var recentlyClicked by remember { mutableStateOf<Pair<Int, Boolean>?>(null) }
                 LaunchedEffect(recentlyClicked) {
@@ -229,51 +246,86 @@ fun BandLockScreen(
                     if (rc.first != index) return ""
                     return if (rc.second) " ✓" else " ✗"
                 }
+
+                val quickItems = if (useIndependentLock) {
+                    listOf(
+                        "All bands (all RATs)" to 0,
+                        "All 5G bands (NSA+SA)" to 1,
+                        "All NR-SA bands" to 2,
+                        "All NR-NSA bands" to 3,
+                        "All LTE bands" to 4,
+                        "All WCDMA bands" to 5,
+                        "All GSM bands" to 6
+                    )
+                } else {
+                    listOf(
+                        "All bands (all RATs)" to 0,
+                        "All NR bands" to 1,
+                        "All LTE bands" to 4,
+                        "All WCDMA bands" to 5,
+                        "All GSM bands" to 6
+                    )
+                }
+
                 Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     WindowDropdownPreference(
                         entries = listOf(
-                            DropdownEntry(items = listOf(
-                                DropdownItem(text = "All bands (all RATs)${emojiFor(0)}", onClick = {
-                                    val newState = !allBandsEnabled
-                                    hardware.gsm.forEach { gsmChecked[it] = newState }
-                                    hardware.wcdma.forEach { wcdmaChecked[it] = newState }
-                                    hardware.lte.forEach { lteChecked[it] = newState }
-                                    hardware.nr.forEach {
-                                        nrNsaChecked[it] = newState; nrSaChecked[it] = newState
+                            DropdownEntry(items = quickItems.mapIndexed { i, (label, idx) ->
+                                DropdownItem(text = "$label${emojiFor(idx)}", onClick = {
+                                    when (idx) {
+                                        0 -> {
+                                            val newState = !allBandsEnabled
+                                            hardware.gsm.forEach { gsmChecked[it] = newState }
+                                            hardware.wcdma.forEach { wcdmaChecked[it] = newState }
+                                            hardware.lte.forEach { lteChecked[it] = newState }
+                                            if (useIndependentLock) {
+                                                hardware.nr.forEach {
+                                                    nrNsaChecked[it] = newState; nrSaChecked[it] = newState
+                                                }
+                                            } else {
+                                                hardware.nr.forEach { nrChecked[it] = newState }
+                                            }
+                                            recentlyClicked = idx to newState
+                                        }
+                                        1 -> {
+                                            val newState = !all5gEnabled
+                                            if (useIndependentLock) {
+                                                hardware.nr.forEach {
+                                                    nrNsaChecked[it] = newState; nrSaChecked[it] = newState
+                                                }
+                                            } else {
+                                                hardware.nr.forEach { nrChecked[it] = newState }
+                                            }
+                                            recentlyClicked = idx to newState
+                                        }
+                                        2 -> {
+                                            val newState = !allSaEnabled
+                                            hardware.nr.forEach { nrSaChecked[it] = newState }
+                                            recentlyClicked = idx to newState
+                                        }
+                                        3 -> {
+                                            val newState = !allNsaEnabled
+                                            hardware.nr.forEach { nrNsaChecked[it] = newState }
+                                            recentlyClicked = idx to newState
+                                        }
+                                        4 -> {
+                                            val newState = !allLteEnabled
+                                            hardware.lte.forEach { lteChecked[it] = newState }
+                                            recentlyClicked = idx to newState
+                                        }
+                                        5 -> {
+                                            val newState = !allWcdmaEnabled
+                                            hardware.wcdma.forEach { wcdmaChecked[it] = newState }
+                                            recentlyClicked = idx to newState
+                                        }
+                                        6 -> {
+                                            val newState = !allGsmEnabled
+                                            hardware.gsm.forEach { gsmChecked[it] = newState }
+                                            recentlyClicked = idx to newState
+                                        }
                                     }
-                                    recentlyClicked = 0 to newState
-                                }),
-                                DropdownItem(text = "All 5G bands (NSA+SA)${emojiFor(1)}", onClick = {
-                                    val newState = !all5gEnabled
-                                    hardware.nr.forEach { nrNsaChecked[it] = newState; nrSaChecked[it] = newState }
-                                    recentlyClicked = 1 to newState
-                                }),
-                                DropdownItem(text = "All NR-SA bands${emojiFor(2)}", onClick = {
-                                    val newState = !allSaEnabled
-                                    hardware.nr.forEach { nrSaChecked[it] = newState }
-                                    recentlyClicked = 2 to newState
-                                }),
-                                DropdownItem(text = "All NR-NSA bands${emojiFor(3)}", onClick = {
-                                    val newState = !allNsaEnabled
-                                    hardware.nr.forEach { nrNsaChecked[it] = newState }
-                                    recentlyClicked = 3 to newState
-                                }),
-                                DropdownItem(text = "All LTE bands${emojiFor(4)}", onClick = {
-                                    val newState = !allLteEnabled
-                                    hardware.lte.forEach { lteChecked[it] = newState }
-                                    recentlyClicked = 4 to newState
-                                }),
-                                DropdownItem(text = "All WCDMA bands${emojiFor(5)}", onClick = {
-                                    val newState = !allWcdmaEnabled
-                                    hardware.wcdma.forEach { wcdmaChecked[it] = newState }
-                                    recentlyClicked = 5 to newState
-                                }),
-                                DropdownItem(text = "All GSM bands${emojiFor(6)}", onClick = {
-                                    val newState = !allGsmEnabled
-                                    hardware.gsm.forEach { gsmChecked[it] = newState }
-                                    recentlyClicked = 6 to newState
                                 })
-                            ))
+                            })
                         ),
                         title = "Quick selections",
                         summary = "Toggle band groups",
@@ -285,13 +337,20 @@ fun BandLockScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 if (hardware.nr.isNotEmpty()) {
-                    SmallTitle("NR-SA")
-                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        BandCheckboxGrid(hardware.nr.sorted(), nrSaChecked, "n")
-                    }
-                    SmallTitle("NR-NSA")
-                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        BandCheckboxGrid(hardware.nr.sorted(), nrNsaChecked, "n")
+                    if (useIndependentLock) {
+                        SmallTitle("NR-SA")
+                        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            BandCheckboxGrid(hardware.nr.sorted(), nrSaChecked, "n")
+                        }
+                        SmallTitle("NR-NSA")
+                        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            BandCheckboxGrid(hardware.nr.sorted(), nrNsaChecked, "n")
+                        }
+                    } else {
+                        SmallTitle("NR")
+                        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            BandCheckboxGrid(hardware.nr.sorted(), nrChecked, "n")
+                        }
                     }
                 }
                 if (hardware.lte.isNotEmpty()) {
@@ -345,13 +404,14 @@ fun BandLockScreen(
                 )
                 Button(
                     onClick = {
+                        val nrBands = nrChecked.filterValues { it }.keys
                         val state = SimState(
                             ratMask = ratChecked.filterValues { it }.keys,
                             gsmBands = gsmChecked.filterValues { it }.keys,
                             wcdmaBands = wcdmaChecked.filterValues { it }.keys,
                             lteBands = lteChecked.filterValues { it }.keys,
-                            nrNsaBands = nrNsaChecked.filterValues { it }.keys,
-                            nrSaBands = nrSaChecked.filterValues { it }.keys,
+                            nrNsaBands = if (useIndependentLock) nrNsaChecked.filterValues { it }.keys else nrBands,
+                            nrSaBands = if (useIndependentLock) nrSaChecked.filterValues { it }.keys else nrBands,
                             nrMode = nrMode
                         )
                         onApply(state)

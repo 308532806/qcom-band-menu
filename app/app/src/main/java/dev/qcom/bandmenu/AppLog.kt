@@ -6,8 +6,20 @@ object AppLog {
     @Volatile
     var debugEnabled = false
 
+    private const val MAX_LOG_LEN = 3800
+
     fun d(tag: String, msg: String) {
-        if (debugEnabled) Log.d(tag, msg)
+        if (!debugEnabled) return
+        if (msg.length <= MAX_LOG_LEN) {
+            Log.d(tag, msg)
+        } else {
+            var idx = 0
+            while (idx < msg.length) {
+                val end = minOf(idx + MAX_LOG_LEN, msg.length)
+                Log.d(tag, msg.substring(idx, end))
+                idx = end
+            }
+        }
     }
 
     fun e(tag: String, msg: String) {
@@ -27,6 +39,15 @@ object AppLog {
     }
 
     fun i(tag: String, msg: String) {
-        Log.i(tag, msg)
+        if (msg.length <= MAX_LOG_LEN) {
+            Log.i(tag, msg)
+        } else {
+            var idx = 0
+            while (idx < msg.length) {
+                val end = minOf(idx + MAX_LOG_LEN, msg.length)
+                Log.i(tag, msg.substring(idx, end))
+                idx = end
+            }
+        }
     }
 }

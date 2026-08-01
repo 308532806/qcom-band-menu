@@ -26,6 +26,7 @@ object BandPreferences {
     private val NR_SA_SIM2 = stringSetPreferencesKey("nr_sa_sim2")
     private val NR_MODE_SIM2 = stringPreferencesKey("nr_mode_sim2")
     private val DEBUG_LOGGING = booleanPreferencesKey("debug_logging")
+    private val NR_INDEPENDENT_SUPPORTED = booleanPreferencesKey("nr_independent_supported")
 
     fun getSimState(dataStore: DataStore<Preferences>, sim: Int): Flow<SimState> {
         return dataStore.data.map { prefs ->
@@ -95,5 +96,13 @@ object BandPreferences {
 
     suspend fun setDebugLogging(dataStore: DataStore<Preferences>, enabled: Boolean) {
         dataStore.edit { it[DEBUG_LOGGING] = enabled }
+    }
+
+    fun getNrIndependentSupported(dataStore: DataStore<Preferences>): Flow<Boolean?> {
+        return dataStore.data.map { it[NR_INDEPENDENT_SUPPORTED] }
+    }
+
+    suspend fun setNrIndependentSupported(dataStore: DataStore<Preferences>, supported: Boolean) {
+        dataStore.edit { it[NR_INDEPENDENT_SUPPORTED] = supported }
     }
 }

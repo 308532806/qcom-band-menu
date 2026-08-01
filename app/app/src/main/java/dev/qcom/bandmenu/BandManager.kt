@@ -24,11 +24,61 @@ data class HardwareBands(
     val nr: Set<Int> = emptySet()
 )
 
+data class LteCellLockEntry(
+    val pci: Int = 0,
+    val earfcn: Int = 0
+)
+
+data class LteCellLockState(
+    val valid: Boolean = false,
+    val locks: List<LteCellLockEntry> = emptyList()
+)
+
+data class NrPciLock(
+    val pci: Int = 0,
+    val scsKhz: Int = 0,
+    val arfcn: Int = 0,
+    val bands: Set<Int> = emptySet()
+)
+
+data class NrArfcnLockEntry(
+    val arfcn: Int = 0,
+    val scsKhz: Int = 0
+)
+
+data class NrGnbAllowlist(
+    val gnbIds: List<Int> = emptyList(),
+    val idBits: Int? = null
+)
+
+data class NrCellLockState(
+    val valid: Boolean = false,
+    val type: String = "none",
+    val typeRaw: Int = 2,
+    val pciLock: NrPciLock? = null,
+    val arfcnLock: List<NrArfcnLockEntry>? = null,
+    val multiPciLock: Boolean = false,
+    val gnbAllowlist: NrGnbAllowlist? = null
+)
+
+data class CellLockState(
+    val lte: LteCellLockState = LteCellLockState(),
+    val nr: NrCellLockState = NrCellLockState()
+)
+
+data class NrIndependentCapability(
+    val checked: Boolean = false,
+    val independentLockSupported: Boolean? = null
+)
+
 data class ModemState(
     val sim1: SimState = SimState(),
     val sim2: SimState = SimState(),
     val hardware: HardwareBands = HardwareBands(),
-    val binaryInstalled: Boolean = false
+    val binaryInstalled: Boolean = false,
+    val sim1CellLock: CellLockState = CellLockState(),
+    val sim2CellLock: CellLockState = CellLockState(),
+    val nrIndependentSupported: Boolean? = null
 )
 
 object BandConstants {
@@ -46,6 +96,8 @@ data class DaemonResponse(
     val error: DaemonError?,
     val simState: SimState?,
     val hardware: HardwareBands?,
+    val cellLockState: CellLockState?,
+    val nrIndependentCapability: NrIndependentCapability?,
     val sim: Int,
     val status: String
 )
@@ -78,6 +130,7 @@ object JsonRequestBuilder {
     fun lteSet(bands: Set<Int>): JSONObject = bandSet("lte_set", bands)
     fun nrSaSet(bands: Set<Int>): JSONObject = bandSet("nr_sa_set", bands)
     fun nrNsaSet(bands: Set<Int>): JSONObject = bandSet("nr_nsa_set", bands)
+    fun nrSet(bands: Set<Int>): JSONObject = bandSet("nr_set", bands)
 
     private fun bandSet(cmd: String, bands: Set<Int>): JSONObject {
         val req = JSONObject().put("cmd", cmd)
@@ -106,6 +159,39 @@ object JsonRequestBuilder {
 
     fun verboseSet(verbose: Boolean): JSONObject =
         JSONObject().put("cmd", "verbose_set").put("verbose", verbose)
+
+    fun lteCellLockSet(earfcn: Int, pci: Int): JSONObject =
+        JSONObject().put("cmd", "lte_cell_lock_set").put("earfcn", earfcn).put("pci", pci)
+
+    fun lteCellLockClear(): JSONObject = JSONObject().put("cmd", "lte_cell_lock_clear")
+
+    fun nrCellLockPciSet(arfcn: Int, pci: Int, scsKhz: Int, band: Int): JSONObject =
+        JSONObject().put("cmd", "nr_cell_lock_pci_set")
+            .put("arfcn", arfcn).put("pci", pci).put("scs_khz", scsKhz).put("band", band)
+
+    fun nrCellLockArfcnSet(arfcn: Int, scsKhz: Int): JSONObject =
+        JSONObject().put("cmd", "nr_cell_lock_arfcn_set")
+            .put("arfcn", arfcn).put("scs_khz", scsKhz)
+
+    fun nrCellLockMultiPciSet(arfcn: Int, scsKhz: Int, band: Int, pciList: List<Int>): JSONObject {
+        val arr = JSONArray()
+        pciList.forEach { arr.put(it) }
+        return JSONObject().put("cmd", "nr_cell_lock_multi_pci_set")
+            .put("arfcn", arfcn).put("scs_khz", scsKhz).put("band", band).put("pci_list", arr)
+    }
+
+    fun nrCellLockGnbSet(idBits: Int, gnbIds: List<Int>): JSONObject {
+        val arr = JSONArray()
+        gnbIds.forEach { arr.put(it) }
+        return JSONObject().put("cmd", "nr_cell_lock_gnb_set")
+            .put("id_bits", idBits).put("gnb_ids", arr)
+    }
+
+    fun nrCellLockClear(): JSONObject = JSONObject().put("cmd", "nr_cell_lock_clear")
+
+    fun queryLteCellLock(): JSONObject = JSONObject().put("cmd", "query_lte_cell_lock")
+
+    fun queryNrCellLock(): JSONObject = JSONObject().put("cmd", "query_nr_cell_lock")
 }
 
 object JsonStateParser {
@@ -120,6 +206,8 @@ object JsonStateParser {
             error = if (errorJson != null) parseError(errorJson) else null,
             simState = if (stateJson != null) parseSimState(stateJson) else null,
             hardware = if (stateJson != null) parseHardware(stateJson) else null,
+            cellLockState = if (stateJson != null) parseCellLockState(stateJson) else null,
+            nrIndependentCapability = if (stateJson != null) parseNrIndependentCapability(stateJson) else null,
             sim = if (stateJson != null) stateJson.optInt("sim", 1) else 1,
             status = if (stateJson != null) stateJson.optString("status", "") else ""
         )
@@ -163,6 +251,94 @@ object JsonStateParser {
             wcdma = parseIntArray(hw, "wcdma"),
             lte = parseIntArray(hw, "lte"),
             nr = parseIntArray(hw, "nr")
+        )
+    }
+
+    fun parseCellLockState(state: JSONObject): CellLockState {
+        val lteJson = state.optJSONObject("lte_cell_lock")
+        val nrJson = state.optJSONObject("nr_cell_lock")
+        return CellLockState(
+            lte = if (lteJson != null) parseLteCellLock(lteJson) else LteCellLockState(),
+            nr = if (nrJson != null) parseNrCellLock(nrJson) else NrCellLockState()
+        )
+    }
+
+    fun parseNrIndependentCapability(state: JSONObject): NrIndependentCapability {
+        val cap = state.optJSONObject("nr_independent_capability") ?: return NrIndependentCapability()
+        val checked = cap.optBoolean("checked", false)
+        val supported = if (cap.has("independent_lock_supported") && !cap.isNull("independent_lock_supported"))
+            cap.optBoolean("independent_lock_supported") else null
+        return NrIndependentCapability(checked = checked, independentLockSupported = supported)
+    }
+
+    private fun parseLteCellLock(json: JSONObject): LteCellLockState {
+        val valid = json.optBoolean("valid", false)
+        val locksArr = json.optJSONArray("locks")
+        val locks = mutableListOf<LteCellLockEntry>()
+        if (locksArr != null) {
+            for (i in 0 until locksArr.length()) {
+                val lockObj = locksArr.optJSONObject(i)
+                if (lockObj != null) {
+                    locks.add(LteCellLockEntry(
+                        pci = lockObj.optInt("pci", 0),
+                        earfcn = lockObj.optInt("earfcn", 0)
+                    ))
+                }
+            }
+        }
+        return LteCellLockState(valid = valid, locks = locks)
+    }
+
+    private fun parseNrCellLock(json: JSONObject): NrCellLockState {
+        val valid = json.optBoolean("valid", false)
+        val type = json.optString("type", "none")
+        val typeRaw = json.optInt("type_raw", 2)
+
+        val pciLockJson = json.optJSONObject("pci_lock")
+        val pciLock = if (pciLockJson != null) {
+            NrPciLock(
+                pci = pciLockJson.optInt("pci", 0),
+                scsKhz = pciLockJson.optInt("scs_khz", 0),
+                arfcn = pciLockJson.optInt("arfcn", 0),
+                bands = parseIntArray(pciLockJson, "bands")
+            )
+        } else null
+
+        val arfcnLockArr = json.optJSONArray("arfcn_lock")
+        val arfcnLock = if (arfcnLockArr != null) {
+            val list = mutableListOf<NrArfcnLockEntry>()
+            for (i in 0 until arfcnLockArr.length()) {
+                val entry = arfcnLockArr.optJSONObject(i)
+                if (entry != null) {
+                    list.add(NrArfcnLockEntry(
+                        arfcn = entry.optInt("arfcn", 0),
+                        scsKhz = entry.optInt("scs_khz", 0)
+                    ))
+                }
+            }
+            list
+        } else null
+
+        val multiPciLockJson = json.optJSONObject("multi_pci_lock")
+        val multiPciLock = multiPciLockJson?.optBoolean("present", false) ?: false
+
+        val gnbJson = json.optJSONObject("gnb_allowlist")
+        val gnbAllowlist = if (gnbJson != null) {
+            NrGnbAllowlist(
+                gnbIds = parseIntArray(gnbJson, "gnb_ids").toList(),
+                idBits = if (gnbJson.has("id_bits") && !gnbJson.isNull("id_bits"))
+                    gnbJson.optInt("id_bits") else null
+            )
+        } else null
+
+        return NrCellLockState(
+            valid = valid,
+            type = type,
+            typeRaw = typeRaw,
+            pciLock = pciLock,
+            arfcnLock = arfcnLock,
+            multiPciLock = multiPciLock,
+            gnbAllowlist = gnbAllowlist
         )
     }
 
