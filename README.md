@@ -10,6 +10,7 @@ Apply cellular forcings such as RAT preferences, band locking, and 5G-NR modes t
 - Select SA+NSA, NSA-only, or SA-only NR operating modes
 - Query modem-reported hardware-supported bands
 - Restore band locks to hardware defaults
+- Instant Cell & ARFCN locking (app only)
 - Available as both an Android app and a command-line utility
 
 <img height="600" alt="image" src="https://github.com/user-attachments/assets/dbd960de-2027-4221-931d-ef63e448bc7b" />
