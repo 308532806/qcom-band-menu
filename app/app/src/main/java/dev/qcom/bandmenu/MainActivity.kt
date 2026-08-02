@@ -16,6 +16,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import dev.qcom.bandmenu.ui.MainScreen
 import dev.qcom.bandmenu.ui.CellLockResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -310,13 +311,16 @@ class MainActivity : ComponentActivity() {
                                             errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
                                             return@withContext
                                         }
-                                        // NR clear: modem may reject if no lock active — that's the
-                                        // desired state. Wrap in own try-catch so I/O errors don't
-                                        // abort the LTE clear.
-                                        try {
-                                            JsonStateParser.parseResponse(daemonManager.nrCellLockClear())
-                                        } catch (e: Exception) {
-                                            AppLog.w(TAG, "CellLock clear all: NR clear failed (ignored)", e)
+                                        // NR clear: only when the device has NR hardware. The modem
+                                        // may reject if no lock active — that's the desired state.
+                                        // Wrap in own try-catch so I/O errors don't abort the LTE
+                                        // clear.
+                                        if (modemState?.hardware?.nr?.isNotEmpty() == true) {
+                                            try {
+                                                JsonStateParser.parseResponse(daemonManager.nrCellLockClear())
+                                            } catch (e: Exception) {
+                                                AppLog.w(TAG, "CellLock clear all: NR clear failed (ignored)", e)
+                                            }
                                         }
                                         val lteResp = JsonStateParser.parseResponse(daemonManager.lteCellLockClear())
                                         if (!lteResp.ok) errorMsg = lteResp.error?.message
@@ -500,7 +504,12 @@ class MainActivity : ComponentActivity() {
                                                 firstError = lastResp.error
                                             }
                                         }
-                                        newState = lastResp.simState
+                                        // Give the modem time to apply changes before re-reading state.
+                                        // The GET after each SET may read stale data if the modem hasn't
+                                        // fully applied the change yet (especially for RAT mask changes).
+                                        delay(200)
+                                        val queryResp = JsonStateParser.parseResponse(daemonManager.query())
+                                        newState = queryResp.simState ?: lastResp.simState
                                     } catch (e: Exception) {
                                         errorMsg = "Apply failed: ${e.message}"
                                         AppLog.e(TAG, "Apply SIM $sim: error", e)

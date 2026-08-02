@@ -30,7 +30,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -96,6 +98,9 @@ fun CellLockScreen(
     val statusBarInset = WindowInsets.statusBars.asPaddingValues(density).calculateTopPadding()
     val topBarHeight = statusBarInset + TopAppBarDefaults.CollapsedHeight
 
+    val hapticFeedback = LocalHapticFeedback.current
+    val hasNrHardware = modemState?.hardware?.nr?.isNotEmpty() == true
+
     var selectedSim by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     var experimentalEnabled by remember { mutableStateOf(false) }
@@ -140,6 +145,7 @@ fun CellLockScreen(
                             tabs = listOf("SIM 1", "SIM 2"),
                             selectedTabIndex = selectedSim,
                             onTabSelected = { index ->
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.Confirm)
                                 selectedSim = index
                                 onSimSwitch(index)
                             },
@@ -160,7 +166,8 @@ fun CellLockScreen(
                                 onApplyLock = onApplyLock,
                                 experimentalEnabled = experimentalEnabled,
                                 snackbarHostState = snackbarHostState,
-                                navbarSpace = navbarSpace
+                                navbarSpace = navbarSpace,
+                                hasNrHardware = hasNrHardware
                             )
                         }
                     }
@@ -184,8 +191,8 @@ fun CellLockScreen(
                 }
 
                 // 3-dot menu at very top right, above the title bar
-                WindowIconDropdownMenu(
-                    entries = listOf(
+                val menuEntries = if (hasNrHardware) {
+                    listOf(
                         DropdownEntry(items = listOf(
                             DropdownItem(
                                 text = "Clear ALL",
@@ -221,7 +228,25 @@ fun CellLockScreen(
                                 onClick = { experimentalEnabled = !experimentalEnabled }
                             )
                         ))
-                    ),
+                    )
+                } else {
+                    listOf(
+                        DropdownEntry(items = listOf(
+                            DropdownItem(
+                                text = "Clear ALL",
+                                onClick = { onClearAll(selectedSim + 1) }
+                            )
+                        )),
+                        DropdownEntry(items = listOf(
+                            DropdownItem(
+                                text = "Clear 4G",
+                                onClick = { onClear4G(selectedSim + 1) }
+                            )
+                        ))
+                    )
+                }
+                WindowIconDropdownMenu(
+                    entries = menuEntries,
                     modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp)
                 ) {
                     Icon(
@@ -245,7 +270,8 @@ private fun SimCellLockPage(
     onApplyLock: (sim: Int, fieldIndex: Int, input: String) -> Unit,
     experimentalEnabled: Boolean,
     snackbarHostState: SnackbarHostState,
-    navbarSpace: androidx.compose.ui.unit.Dp
+    navbarSpace: androidx.compose.ui.unit.Dp,
+    hasNrHardware: Boolean
 ) {
     val scrollState = rememberScrollState()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -329,112 +355,114 @@ private fun SimCellLockPage(
             .verticalScroll(scrollState)
             .padding(bottom = navbarSpace)
     ) {
-        Spacer(modifier = Modifier.height(16.dp))
+        if (hasNrHardware) {
+            Spacer(modifier = Modifier.height(16.dp))
 
-        SmallTitle("5G")
+            SmallTitle("5G")
 
-        // Field 0: NR-ARFCN
-        Text(
-            fieldTitles[0]!!,
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        val o0 = labelOverrides[0]
-        TextField(
-            value = nrArfcnText,
-            onValueChange = { nrArfcnText = it },
-            label = o0?.text ?: defaultLabels[0]!!,
-            colors = TextFieldDefaults.textFieldColors(
-                labelColor = o0?.color ?: defaultLabelColor
-            ),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = numericKeyboard,
-            keyboardActions = KeyboardActions(onDone = {
-                keyboard?.hide()
-                onApplyLock(simSlot + 1, 0, nrArfcnText)
-            })
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Field 1: PCI
-        Text(
-            fieldTitles[1]!!,
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        val o1 = labelOverrides[1]
-        TextField(
-            value = nrPciText,
-            onValueChange = { nrPciText = it },
-            label = o1?.text ?: defaultLabels[1]!!,
-            colors = TextFieldDefaults.textFieldColors(
-                labelColor = o1?.color ?: defaultLabelColor
-            ),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = numericKeyboard,
-            keyboardActions = KeyboardActions(onDone = {
-                keyboard?.hide()
-                onApplyLock(simSlot + 1, 1, nrPciText)
-            })
-        )
-
-        if (experimentalEnabled) {
-            Spacer(modifier = Modifier.height(12.dp))
-            // Field 2: MultiPCI
+            // Field 0: NR-ARFCN
             Text(
-                fieldTitles[2]!!,
+                fieldTitles[0]!!,
                 style = MiuixTheme.textStyles.body2,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary
             )
             Spacer(modifier = Modifier.height(6.dp))
-            val o2 = labelOverrides[2]
+            val o0 = labelOverrides[0]
             TextField(
-                value = nrMultiPciText,
-                onValueChange = { nrMultiPciText = it },
-                label = o2?.text ?: defaultLabels[2]!!,
+                value = nrArfcnText,
+                onValueChange = { nrArfcnText = it },
+                label = o0?.text ?: defaultLabels[0]!!,
                 colors = TextFieldDefaults.textFieldColors(
-                    labelColor = o2?.color ?: defaultLabelColor
+                    labelColor = o0?.color ?: defaultLabelColor
                 ),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = numericKeyboard,
                 keyboardActions = KeyboardActions(onDone = {
                     keyboard?.hide()
-                    onApplyLock(simSlot + 1, 2, nrMultiPciText)
+                    onApplyLock(simSlot + 1, 0, nrArfcnText)
                 })
             )
-        }
 
-        if (experimentalEnabled) {
             Spacer(modifier = Modifier.height(12.dp))
-            // Field 3: gNB
+
+            // Field 1: PCI
             Text(
-                fieldTitles[3]!!,
+                fieldTitles[1]!!,
                 style = MiuixTheme.textStyles.body2,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary
             )
             Spacer(modifier = Modifier.height(6.dp))
-            val o3 = labelOverrides[3]
+            val o1 = labelOverrides[1]
             TextField(
-                value = nrGnbText,
-                onValueChange = { nrGnbText = it },
-                label = o3?.text ?: defaultLabels[3]!!,
+                value = nrPciText,
+                onValueChange = { nrPciText = it },
+                label = o1?.text ?: defaultLabels[1]!!,
                 colors = TextFieldDefaults.textFieldColors(
-                    labelColor = o3?.color ?: defaultLabelColor
+                    labelColor = o1?.color ?: defaultLabelColor
                 ),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = numericKeyboard,
                 keyboardActions = KeyboardActions(onDone = {
                     keyboard?.hide()
-                    onApplyLock(simSlot + 1, 3, nrGnbText)
+                    onApplyLock(simSlot + 1, 1, nrPciText)
                 })
             )
+
+            if (experimentalEnabled) {
+                Spacer(modifier = Modifier.height(12.dp))
+                // Field 2: MultiPCI
+                Text(
+                    fieldTitles[2]!!,
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                val o2 = labelOverrides[2]
+                TextField(
+                    value = nrMultiPciText,
+                    onValueChange = { nrMultiPciText = it },
+                    label = o2?.text ?: defaultLabels[2]!!,
+                    colors = TextFieldDefaults.textFieldColors(
+                        labelColor = o2?.color ?: defaultLabelColor
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = numericKeyboard,
+                    keyboardActions = KeyboardActions(onDone = {
+                        keyboard?.hide()
+                        onApplyLock(simSlot + 1, 2, nrMultiPciText)
+                    })
+                )
+            }
+
+            if (experimentalEnabled) {
+                Spacer(modifier = Modifier.height(12.dp))
+                // Field 3: gNB
+                Text(
+                    fieldTitles[3]!!,
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                val o3 = labelOverrides[3]
+                TextField(
+                    value = nrGnbText,
+                    onValueChange = { nrGnbText = it },
+                    label = o3?.text ?: defaultLabels[3]!!,
+                    colors = TextFieldDefaults.textFieldColors(
+                        labelColor = o3?.color ?: defaultLabelColor
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = numericKeyboard,
+                    keyboardActions = KeyboardActions(onDone = {
+                        keyboard?.hide()
+                        onApplyLock(simSlot + 1, 3, nrGnbText)
+                    })
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(20.dp))

@@ -75,7 +75,7 @@ fun MainScreen(
     nrIndependentSupported: Boolean?
 ) {
     var selectedIndex by remember { mutableIntStateOf(0) }
-    val pagerState = rememberPagerState(pageCount = { 4 })
+    val pagerState = rememberPagerState(pageCount = { 3 })
 
     LaunchedEffect(selectedIndex) {
         if (pagerState.targetPage != selectedIndex) {
@@ -100,40 +100,26 @@ fun MainScreen(
         Box(modifier = Modifier.fillMaxSize()) {
             HorizontalPager(
                 state = pagerState,
-                beyondViewportPageCount = 3,
+                beyondViewportPageCount = 2,
                 userScrollEnabled = true,
                 modifier = Modifier.fillMaxSize().layerBackdrop(backdrop)
             ) { page ->
                 when (page) {
                     0 -> BandLockScreen(
-                        slot = 0,
                         modemState = modemState,
                         isLoading = isLoading,
-                        isRefreshing = refreshingSlots.contains(0),
-                        onRefresh = { onRefresh(0) },
-                        refreshKey = refreshKey0,
-                        onApply = { state -> onApply(0, state) },
-                        onReset = { onReset(0) },
+                        refreshingSlots = refreshingSlots,
+                        onRefresh = onRefresh,
+                        refreshKey0 = refreshKey0,
+                        refreshKey1 = refreshKey1,
+                        onApply = onApply,
+                        onReset = onReset,
+                        nrIndependentSupported = nrIndependentSupported,
                         contentPadding = topPadding,
                         snackbarHostState = snackbarHostState,
-                        backdrop = backdrop,
-                        nrIndependentSupported = nrIndependentSupported
+                        backdrop = backdrop
                     )
-                    1 -> BandLockScreen(
-                        slot = 1,
-                        modemState = modemState,
-                        isLoading = isLoading,
-                        isRefreshing = refreshingSlots.contains(1),
-                        onRefresh = { onRefresh(1) },
-                        refreshKey = refreshKey1,
-                        onApply = { state -> onApply(1, state) },
-                        onReset = { onReset(1) },
-                        contentPadding = topPadding,
-                        snackbarHostState = snackbarHostState,
-                        backdrop = backdrop,
-                        nrIndependentSupported = nrIndependentSupported
-                    )
-                    2 -> CellLockScreen(
+                    1 -> CellLockScreen(
                         modemState = modemState,
                         isLoading = isLoading,
                         isRefreshing = cellLockRefreshing,
@@ -171,24 +157,19 @@ fun MainScreen(
                     selectedIndex = { selectedIndex },
                     onSelected = { selectedIndex = it },
                     backdrop = backdrop,
-                    tabsCount = 4
+                    tabsCount = 3
                 ) {
                     FloatingBottomBarItem(onClick = { selectedIndex = 0 }) {
-                        Icon(imageVector = MiuixIcons.Phone, contentDescription = "SIM 1",
+                        Icon(imageVector = MiuixIcons.Phone, contentDescription = "Bands",
                             tint = MiuixTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
-                        Text("SIM 1", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
+                        Text("Bands", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
                     }
                     FloatingBottomBarItem(onClick = { selectedIndex = 1 }) {
-                        Icon(imageVector = MiuixIcons.Phone, contentDescription = "SIM 2",
+                        Icon(imageVector = MiuixIcons.Search, contentDescription = "Cells",
                             tint = MiuixTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
-                        Text("SIM 2", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
+                        Text("Cells", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
                     }
                     FloatingBottomBarItem(onClick = { selectedIndex = 2 }) {
-                        Icon(imageVector = MiuixIcons.Search, contentDescription = "Lock",
-                            tint = MiuixTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
-                        Text("Lock", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
-                    }
-                    FloatingBottomBarItem(onClick = { selectedIndex = 3 }) {
                         Icon(imageVector = MiuixIcons.Info, contentDescription = "Info",
                             tint = MiuixTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
                         Text("Info", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
