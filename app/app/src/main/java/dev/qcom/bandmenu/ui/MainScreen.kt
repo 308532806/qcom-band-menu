@@ -59,6 +59,7 @@ fun MainScreen(
     onDismissErrorDialog: () -> Unit,
     snackbarHostState: top.yukonga.miuix.kmp.basic.SnackbarHostState,
     snackbarMessage: String?,
+    snackbarIsError: Boolean,
     onSnackbarShown: () -> Unit,
     debugEnabled: Boolean,
     onDebugToggle: () -> Unit,
@@ -181,18 +182,21 @@ fun MainScreen(
             val density = LocalDensity.current
             val navInset = WindowInsets.navigationBars.asPaddingValues(density).calculateBottomPadding()
             val navbarHeightDp = with(density) { 128f.toDp() }
+            // Bands page has Apply/Reset buttons (~72dp) at the bottom, so the snackbar
+            // needs extra clearance. Cells and Info pages have no buttons.
+            val buttonSpace = if (selectedIndex == 0) 62.dp else 0.dp
             top.yukonga.miuix.kmp.basic.SnackbarHost(
                 state = snackbarHostState,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(bottom = navbarHeightDp + 16.dp + navInset + 50.dp + 8.dp)
+                    .padding(bottom = navbarHeightDp + 16.dp + navInset + buttonSpace + 18.dp)
             ) { data ->
                 top.yukonga.miuix.kmp.basic.Snackbar(
                     data = data,
                     colors = top.yukonga.miuix.kmp.basic.SnackbarDefaults.snackbarColors(
-                        containerColor = androidx.compose.ui.graphics.Color.White,
-                        contentColor = androidx.compose.ui.graphics.Color.Black,
+                        containerColor = if (snackbarIsError) androidx.compose.ui.graphics.Color(0xFFF44336) else androidx.compose.ui.graphics.Color(0xFF4CAF50),
+                        contentColor = androidx.compose.ui.graphics.Color.White,
                     )
                 )
             }

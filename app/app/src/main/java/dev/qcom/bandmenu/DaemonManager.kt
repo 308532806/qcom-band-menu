@@ -40,6 +40,12 @@ class DaemonManager(private val context: Context) {
     private var reader: BufferedReader? = null
     private var requestId = 0
 
+    @Volatile
+    private var consecutiveFailures = 0
+
+    @Volatile
+    var onConnectionEvent: ((Boolean) -> Unit)? = null
+
     fun start(onDenied: () -> Unit, onLaunchFailed: (String) -> Unit = {}) {
         AppLog.d(TAG, "start: requesting shell...")
         launchError.value = null
@@ -162,6 +168,10 @@ class DaemonManager(private val context: Context) {
             JSONObject(line)
             // Connection is good — upgrade to full 15s timeout
             s.soTimeout = 15000
+            if (consecutiveFailures >= 3) {
+                onConnectionEvent?.invoke(true)
+            }
+            consecutiveFailures = 0
             true
         } catch (e: Exception) {
             AppLog.i(TAG, "tryConnect: failed: ${e.javaClass.name}: ${e.message}")
@@ -213,6 +223,10 @@ class DaemonManager(private val context: Context) {
         // C1: Attempt reconnect if writer/reader is null
         if (writer == null || reader == null) {
             if (!reconnect()) {
+                consecutiveFailures++
+                if (consecutiveFailures == 3) {
+                    onConnectionEvent?.invoke(false)
+                }
                 throw IOException("Not connected")
             }
         }
@@ -260,6 +274,10 @@ class DaemonManager(private val context: Context) {
             AppLog.w(TAG, "sendRequest: id mismatch (expected $id, got $respId)")
         }
 
+        if (consecutiveFailures >= 3) {
+            onConnectionEvent?.invoke(true)
+        }
+        consecutiveFailures = 0
         return resp
     }
 
@@ -374,6 +392,7 @@ class DaemonManager(private val context: Context) {
         AppLog.d(TAG, "retry")
         isReady.value = false
         isRootDenied.value = false
+        consecutiveFailures = 0
         try { socket?.close() } catch (_: Exception) {}
         socket = null
         writer = null

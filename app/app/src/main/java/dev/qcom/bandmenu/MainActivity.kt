@@ -1,6 +1,8 @@
 package dev.qcom.bandmenu
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -64,6 +66,7 @@ class MainActivity : ComponentActivity() {
                 var errorTitle by remember { mutableStateOf("") }
                 var errorMessage by remember { mutableStateOf("") }
                 var snackbarMessage by remember { mutableStateOf<String?>(null) }
+                var snackbarIsError by remember { mutableStateOf(false) }
                 var refreshingSlots by remember { mutableStateOf(emptySet<Int>()) }
                 var refreshKey0 by remember { mutableIntStateOf(0) }
                 var refreshKey1 by remember { mutableIntStateOf(0) }
@@ -94,6 +97,17 @@ class MainActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(Unit) {
+                    daemonManager.onConnectionEvent = { restored ->
+                        Handler(Looper.getMainLooper()).post {
+                            if (restored) {
+                                snackbarIsError = false
+                                snackbarMessage = "Daemon connection restored"
+                            } else {
+                                snackbarIsError = true
+                                snackbarMessage = "Daemon connection lost — retrying..."
+                            }
+                        }
+                    }
                     daemonManager.start(
                         onDenied = {
                             showRootDenied = true
@@ -337,6 +351,7 @@ class MainActivity : ComponentActivity() {
                                     else
                                         modemState?.copy(sim2CellLock = newCellLock!!)
                                 }
+                                snackbarIsError = errorMsg != null
                                 snackbarMessage = errorMsg ?: "Cleared all cell locks for SIM $sim"
                             }
                         }
@@ -374,6 +389,7 @@ class MainActivity : ComponentActivity() {
                                     else
                                         modemState?.copy(sim2CellLock = newCellLock!!)
                                 }
+                                snackbarIsError = errorMsg != null || ioError
                                 snackbarMessage = when {
                                     errorMsg != null -> errorMsg
                                     ioError -> "Clear 5G failed (connection error)"
@@ -409,6 +425,7 @@ class MainActivity : ComponentActivity() {
                                     else
                                         modemState?.copy(sim2CellLock = newCellLock!!)
                                 }
+                                snackbarIsError = errorMsg != null
                                 snackbarMessage = errorMsg ?: "Cleared 4G cell lock for SIM $sim"
                             }
                         }
@@ -448,6 +465,7 @@ class MainActivity : ComponentActivity() {
                                     cellLockRefreshKey++
                                 }
                                 if (errorMsg != null) {
+                                    snackbarIsError = true
                                     snackbarMessage = errorMsg
                                 }
                                 cellLockRefreshing = false
@@ -527,6 +545,7 @@ class MainActivity : ComponentActivity() {
                                         modemState?.copy(sim2 = newState) ?: ModemState(sim2 = newState)
                                 }
                                 if (slot == 0) refreshKey0++ else refreshKey1++
+                                snackbarIsError = errorMsg != null || firstError != null
                                 snackbarMessage = if (errorMsg != null) errorMsg
                                     else if (firstError != null) {
                                         val msg = firstError.message
@@ -575,6 +594,7 @@ class MainActivity : ComponentActivity() {
                                         modemState?.copy(sim2 = newState) ?: ModemState(sim2 = newState)
                                 }
                                 if (slot == 0) refreshKey0++ else refreshKey1++
+                                snackbarIsError = errorMsg != null || firstError != null
                                 snackbarMessage = if (errorMsg != null) errorMsg
                                     else if (firstError != null) firstError.message
                                     else "Reset to hardware defaults for SIM $sim"
@@ -624,6 +644,7 @@ class MainActivity : ComponentActivity() {
                                         if (slot == 0) refreshKey0++ else refreshKey1++
                                         AppLog.i(TAG, "Refresh SIM $sim: success")
                                     } else {
+                                        snackbarIsError = true
                                         snackbarMessage = errorMsg ?: "Refresh failed"
                                         AppLog.i(TAG, "Refresh SIM $sim: failed")
                                     }
@@ -650,6 +671,7 @@ class MainActivity : ComponentActivity() {
                     onDismissErrorDialog = { showErrorDialog = false },
                     snackbarHostState = snackbarHostState,
                     snackbarMessage = snackbarMessage,
+                    snackbarIsError = snackbarIsError,
                     onSnackbarShown = { snackbarMessage = null },
                     debugEnabled = debugEnabled,
                     onDebugToggle = {
