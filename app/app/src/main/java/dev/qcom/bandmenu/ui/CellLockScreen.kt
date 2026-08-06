@@ -247,7 +247,8 @@ fun CellLockScreen(
                 }
                 WindowIconDropdownMenu(
                     entries = menuEntries,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp)
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp),
+                    collapseOnSelection = true
                 ) {
                     Icon(
                         imageVector = MiuixIcons.More,

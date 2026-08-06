@@ -402,10 +402,16 @@ private fun SimBandLockPage(
             }
         }
 
+        val quickGroups = listOf(
+            quickItems.filter { it.second == 0 },
+            quickItems.filter { it.second in 1..3 },
+            quickItems.filter { it.second in 4..6 }
+        ).filter { it.isNotEmpty() }
+
         Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             WindowDropdownPreference(
-                entries = listOf(
-                    DropdownEntry(items = quickItems.mapIndexed { i, (label, idx) ->
+                entries = quickGroups.map { group ->
+                    DropdownEntry(items = group.map { (label, idx) ->
                         DropdownItem(text = "$label${emojiFor(idx)}", onClick = {
                             when (idx) {
                                 0 -> {
@@ -461,7 +467,7 @@ private fun SimBandLockPage(
                             }
                         })
                     })
-                ),
+                },
                 title = "Quick selections",
                 summary = "Toggle band groups",
                 showValue = false,
