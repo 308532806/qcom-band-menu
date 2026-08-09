@@ -322,6 +322,11 @@ class DaemonManager(private val context: Context) {
     fun queryLteCellLock(): JSONObject = sendRequest(JsonRequestBuilder.queryLteCellLock())
     fun queryNrCellLock(): JSONObject = sendRequest(JsonRequestBuilder.queryNrCellLock())
 
+    fun plmnLockSet(mcc: Int, mnc: Int): JSONObject =
+        sendRequest(JsonRequestBuilder.plmnLockSet(mcc, mnc))
+
+    fun plmnLockClear(): JSONObject = sendRequest(JsonRequestBuilder.plmnLockClear())
+
     @Synchronized
     fun stop() {
         AppLog.i(TAG, "stop: sending shutdown...")

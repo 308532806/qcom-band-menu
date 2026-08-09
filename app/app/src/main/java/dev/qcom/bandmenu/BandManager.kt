@@ -66,6 +66,21 @@ data class CellLockState(
     val nr: NrCellLockState = NrCellLockState()
 )
 
+data class PlmnLockedPlmn(
+    val mcc: Int = 0,
+    val mnc: Int = 0,
+    val mncIncludesPcsDigit: Boolean = false,
+    val mncDisplay: String = ""
+)
+
+data class PlmnLockState(
+    val valid: Boolean = false,
+    val mode: String? = null,
+    val mcc: Int? = null,
+    val mnc: Int? = null,
+    val lockedPlmn: PlmnLockedPlmn? = null
+)
+
 data class NrIndependentCapability(
     val checked: Boolean = false,
     val independentLockSupported: Boolean? = null
@@ -78,6 +93,8 @@ data class ModemState(
     val binaryInstalled: Boolean = false,
     val sim1CellLock: CellLockState = CellLockState(),
     val sim2CellLock: CellLockState = CellLockState(),
+    val sim1PlmnLock: PlmnLockState = PlmnLockState(),
+    val sim2PlmnLock: PlmnLockState = PlmnLockState(),
     val nrIndependentSupported: Boolean? = null
 )
 
@@ -97,6 +114,7 @@ data class DaemonResponse(
     val simState: SimState?,
     val hardware: HardwareBands?,
     val cellLockState: CellLockState?,
+    val plmnLockState: PlmnLockState? = null,
     val nrIndependentCapability: NrIndependentCapability?,
     val sim: Int,
     val status: String
@@ -192,6 +210,11 @@ object JsonRequestBuilder {
     fun queryLteCellLock(): JSONObject = JSONObject().put("cmd", "query_lte_cell_lock")
 
     fun queryNrCellLock(): JSONObject = JSONObject().put("cmd", "query_nr_cell_lock")
+
+    fun plmnLockSet(mcc: Int, mnc: Int): JSONObject =
+        JSONObject().put("cmd", "plmn_lock_set").put("mcc", mcc).put("mnc", mnc)
+
+    fun plmnLockClear(): JSONObject = JSONObject().put("cmd", "plmn_lock_clear")
 }
 
 object JsonStateParser {
@@ -207,6 +230,7 @@ object JsonStateParser {
             simState = if (stateJson != null) parseSimState(stateJson) else null,
             hardware = if (stateJson != null) parseHardware(stateJson) else null,
             cellLockState = if (stateJson != null) parseCellLockState(stateJson) else null,
+            plmnLockState = if (stateJson != null) parsePlmnLockState(stateJson) else null,
             nrIndependentCapability = if (stateJson != null) parseNrIndependentCapability(stateJson) else null,
             sim = if (stateJson != null) stateJson.optInt("sim", 1) else 1,
             status = if (stateJson != null) stateJson.optString("status", "") else ""
@@ -260,6 +284,26 @@ object JsonStateParser {
         return CellLockState(
             lte = if (lteJson != null) parseLteCellLock(lteJson) else LteCellLockState(),
             nr = if (nrJson != null) parseNrCellLock(nrJson) else NrCellLockState()
+        )
+    }
+
+    fun parsePlmnLockState(state: JSONObject): PlmnLockState {
+        val plmnJson = state.optJSONObject("plmn_lock") ?: return PlmnLockState()
+        val lockedJson = plmnJson.optJSONObject("locked_plmn")
+        val lockedPlmn = if (lockedJson != null) {
+            PlmnLockedPlmn(
+                mcc = lockedJson.optInt("mcc", 0),
+                mnc = lockedJson.optInt("mnc", 0),
+                mncIncludesPcsDigit = lockedJson.optBoolean("mnc_includes_pcs_digit", false),
+                mncDisplay = lockedJson.optString("mnc_display", "")
+            )
+        } else null
+        return PlmnLockState(
+            valid = plmnJson.optBoolean("valid", false),
+            mode = if (plmnJson.has("mode") && !plmnJson.isNull("mode")) plmnJson.optString("mode") else null,
+            mcc = if (plmnJson.has("mcc") && !plmnJson.isNull("mcc")) plmnJson.optInt("mcc") else null,
+            mnc = if (plmnJson.has("mnc") && !plmnJson.isNull("mnc")) plmnJson.optInt("mnc") else null,
+            lockedPlmn = lockedPlmn
         )
     }
 

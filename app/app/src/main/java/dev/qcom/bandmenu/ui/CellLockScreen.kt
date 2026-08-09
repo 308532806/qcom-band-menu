@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.Backdrop
 import dev.qcom.bandmenu.CellLockState
 import dev.qcom.bandmenu.ModemState
+import dev.qcom.bandmenu.PlmnLockState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
@@ -85,6 +86,7 @@ fun CellLockScreen(
     onClearAll: (Int) -> Unit,
     onClear5G: (Int) -> Unit,
     onClear4G: (Int) -> Unit,
+    onClearPlmn: (Int) -> Unit,
     lockResult: CellLockResult?,
     onLockResultConsumed: () -> Unit,
     contentPadding: PaddingValues = PaddingValues(),
@@ -160,6 +162,7 @@ fun CellLockScreen(
                             SimCellLockPage(
                                 simSlot = page,
                                 cellLockState = if (page == 0) modemState.sim1CellLock else modemState.sim2CellLock,
+                                plmnLockState = if (page == 0) modemState.sim1PlmnLock else modemState.sim2PlmnLock,
                                 refreshKey = refreshKey,
                                 lockResult = lockResult,
                                 onLockResultConsumed = onLockResultConsumed,
@@ -167,7 +170,8 @@ fun CellLockScreen(
                                 experimentalEnabled = experimentalEnabled,
                                 snackbarHostState = snackbarHostState,
                                 navbarSpace = navbarSpace,
-                                hasNrHardware = hasNrHardware
+                                hasNrHardware = hasNrHardware,
+                                onClearPlmn = onClearPlmn
                             )
                         }
                     }
@@ -223,6 +227,12 @@ fun CellLockScreen(
                         )),
                         DropdownEntry(items = listOf(
                             DropdownItem(
+                                text = "Clear PLMN",
+                                onClick = { onClearPlmn(selectedSim + 1) }
+                            )
+                        )),
+                        DropdownEntry(items = listOf(
+                            DropdownItem(
                                 text = "Enable Experimental",
                                 selected = experimentalEnabled,
                                 onClick = { experimentalEnabled = !experimentalEnabled }
@@ -241,6 +251,12 @@ fun CellLockScreen(
                             DropdownItem(
                                 text = "Clear 4G",
                                 onClick = { onClear4G(selectedSim + 1) }
+                            )
+                        )),
+                        DropdownEntry(items = listOf(
+                            DropdownItem(
+                                text = "Clear PLMN",
+                                onClick = { onClearPlmn(selectedSim + 1) }
                             )
                         ))
                     )
@@ -265,6 +281,7 @@ fun CellLockScreen(
 private fun SimCellLockPage(
     simSlot: Int,
     cellLockState: CellLockState?,
+    plmnLockState: PlmnLockState?,
     refreshKey: Int,
     lockResult: CellLockResult?,
     onLockResultConsumed: () -> Unit,
@@ -272,7 +289,8 @@ private fun SimCellLockPage(
     experimentalEnabled: Boolean,
     snackbarHostState: SnackbarHostState,
     navbarSpace: androidx.compose.ui.unit.Dp,
-    hasNrHardware: Boolean
+    hasNrHardware: Boolean,
+    onClearPlmn: (Int) -> Unit
 ) {
     val scrollState = rememberScrollState()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -282,10 +300,11 @@ private fun SimCellLockPage(
     var nrMultiPciText by remember { mutableStateOf("") }
     var nrGnbText by remember { mutableStateOf("") }
     var ltePciText by remember { mutableStateOf("") }
+    var plmnText by remember { mutableStateOf("") }
 
     var labelOverrides by remember { mutableStateOf<Map<Int, LabelOverride>>(emptyMap()) }
 
-    LaunchedEffect(cellLockState, refreshKey) {
+    LaunchedEffect(cellLockState, plmnLockState, refreshKey) {
         val nr = cellLockState?.nr
         val lte = cellLockState?.lte
 
@@ -310,6 +329,14 @@ private fun SimCellLockPage(
         ltePciText = if (lte?.valid == true && lte.locks.isNotEmpty()) {
             "${lte.locks[0].earfcn} ${lte.locks[0].pci}"
         } else ""
+
+        plmnText = if (plmnLockState?.lockedPlmn != null) {
+            val lp = plmnLockState.lockedPlmn!!
+            val mncStr = lp.mncDisplay.ifBlank { lp.mnc.toString() }
+            "${lp.mcc} $mncStr"
+        } else if (plmnLockState?.mcc != null && plmnLockState.mnc != null) {
+            "${plmnLockState.mcc} ${plmnLockState.mnc}"
+        } else ""
     }
 
     LaunchedEffect(lockResult) {
@@ -333,7 +360,8 @@ private fun SimCellLockPage(
             1 to "NR-ARFCN PCI SCS Band",
             2 to "NR-ARFCN SCS Band PCI1 PCI2...",
             3 to "\"ID bits 22-32\" gNB1 gNB2...",
-            4 to "EARFCN PCI"
+            4 to "EARFCN PCI",
+            5 to "MCC MNC (e.g. 244 01)"
         )
     }
 
@@ -343,7 +371,8 @@ private fun SimCellLockPage(
             1 to "PCI lock: Put NR-ARFCN PCI SCS and Band",
             2 to "MultiPCI lock: Put NR-ARFCN SCS Band and PCI list",
             3 to "gNB lock: Put ID bits (22-32) and gNB IDs",
-            4 to "PCI lock: Put EARFCN and PCI"
+            4 to "PCI lock: Put EARFCN and PCI",
+            5 to "PLMN lock: Put MCC and MNC (e.g. 244 01)"
         )
     }
 
@@ -491,6 +520,33 @@ private fun SimCellLockPage(
             keyboardActions = KeyboardActions(onDone = {
                 keyboard?.hide()
                 onApplyLock(simSlot + 1, 4, ltePciText)
+            })
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        SmallTitle("PLMN lock")
+
+        Text(
+            fieldTitles[5]!!,
+            style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        val o5 = labelOverrides[5]
+        TextField(
+            value = plmnText,
+            onValueChange = { plmnText = it },
+            label = o5?.text ?: defaultLabels[5]!!,
+            colors = TextFieldDefaults.textFieldColors(
+                labelColor = o5?.color ?: defaultLabelColor
+            ),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = numericKeyboard,
+            keyboardActions = KeyboardActions(onDone = {
+                keyboard?.hide()
+                onApplyLock(simSlot + 1, 5, plmnText)
             })
         )
 

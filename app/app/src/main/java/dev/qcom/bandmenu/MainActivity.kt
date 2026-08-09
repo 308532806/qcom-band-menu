@@ -151,6 +151,7 @@ class MainActivity : ComponentActivity() {
                                     val sim1State = sim1Parsed.simState ?: SimState()
                                     val hardware = sim1Parsed.hardware ?: HardwareBands()
                                     val sim1CellLock = sim1Parsed.cellLockState ?: CellLockState()
+                                    val sim1PlmnLock = sim1Parsed.plmnLockState ?: PlmnLockState()
 
                                     // Read NR independent capability from daemon response
                                     val nrCap = sim1Parsed.nrIndependentCapability
@@ -176,6 +177,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                     val sim2State = sim2Parsed.simState ?: SimState()
                                     val sim2CellLock = sim2Parsed.cellLockState ?: CellLockState()
+                                    val sim2PlmnLock = sim2Parsed.plmnLockState ?: PlmnLockState()
 
                                     // Switch back to SIM 1 as default
                                     daemonManager.simSet(1)
@@ -183,6 +185,7 @@ class MainActivity : ComponentActivity() {
                                     initModemState = ModemState(
                                         sim1State, sim2State, hardware, true,
                                         sim1CellLock, sim2CellLock,
+                                        sim1PlmnLock, sim2PlmnLock,
                                         initNrIndependentSupported ?: nrIndependentSupported
                                     )
 
@@ -222,11 +225,13 @@ class MainActivity : ComponentActivity() {
                             modemLock.withLock {
                                 val sim = slot + 1
                                 var newCellLock: CellLockState? = null
+                                var newPlmnLock: PlmnLockState? = null
                                 withContext(Dispatchers.IO) {
                                     try {
                                         val resp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         if (resp.ok) {
                                             newCellLock = resp.cellLockState
+                                            newPlmnLock = resp.plmnLockState
                                         }
                                     } catch (e: Exception) {
                                         AppLog.e(TAG, "CellLock SIM switch: error", e)
@@ -238,6 +243,12 @@ class MainActivity : ComponentActivity() {
                                     else
                                         modemState?.copy(sim2CellLock = newCellLock!!)
                                 }
+                                if (newPlmnLock != null) {
+                                    modemState = if (slot == 0)
+                                        modemState?.copy(sim1PlmnLock = newPlmnLock!!)
+                                    else
+                                        modemState?.copy(sim2PlmnLock = newPlmnLock!!)
+                                }
                             }
                         }
                     },
@@ -247,6 +258,7 @@ class MainActivity : ComponentActivity() {
                                 var success = false
                                 var errorMsg: String? = null
                                 var newCellLock: CellLockState? = null
+                                var newPlmnLock: PlmnLockState? = null
                                 val parts = input.trim().split(Regex("\\s+"))
 
                                 withContext(Dispatchers.IO) {
@@ -284,6 +296,15 @@ class MainActivity : ComponentActivity() {
                                                 if (parts.size < 2) { errorMsg = "Need: earfcn pci"; return@withContext }
                                                 JsonStateParser.parseResponse(daemonManager.lteCellLockSet(parts[0].toInt(), parts[1].toInt()))
                                             }
+                                            5 -> {
+                                                if (parts.size != 2) { errorMsg = "Need: mcc mnc"; return@withContext }
+                                                val mcc = parts[0].toIntOrNull()
+                                                val mnc = parts[1].toIntOrNull()
+                                                if (mcc == null || mcc < 0 || mcc > 999 || mnc == null || mnc < 0 || mnc > 999) {
+                                                    errorMsg = "MCC and MNC must be 0-999"; return@withContext
+                                                }
+                                                JsonStateParser.parseResponse(daemonManager.plmnLockSet(mcc, mnc))
+                                            }
                                             else -> { errorMsg = "Unknown field"; return@withContext }
                                         }
 
@@ -291,7 +312,11 @@ class MainActivity : ComponentActivity() {
                                         if (!resp.ok) {
                                             errorMsg = resp.error?.message ?: "Rejected by modem"
                                         }
-                                        newCellLock = resp.cellLockState
+                                        if (fieldIndex == 5) {
+                                            newPlmnLock = resp.plmnLockState
+                                        } else {
+                                            newCellLock = resp.cellLockState
+                                        }
                                     } catch (e: Exception) {
                                         errorMsg = "Apply failed: ${e.message}"
                                         AppLog.e(TAG, "CellLock apply: error", e)
@@ -299,7 +324,7 @@ class MainActivity : ComponentActivity() {
                                 }
 
                                 val typeName = when (fieldIndex) {
-                                    0 -> "NR-ARFCN"; 1 -> "PCI"; 2 -> "MultiPCI"; 3 -> "gNB"; 4 -> "LTE PCI"; else -> "Unknown"
+                                    0 -> "NR-ARFCN"; 1 -> "PCI"; 2 -> "MultiPCI"; 3 -> "gNB"; 4 -> "LTE PCI"; 5 -> "PLMN"; else -> "Unknown"
                                 }
                                 cellLockResult = CellLockResult(sim, fieldIndex, typeName, success, errorMsg)
 
@@ -309,6 +334,14 @@ class MainActivity : ComponentActivity() {
                                         modemState?.copy(sim1CellLock = newCellLock!!)
                                     else
                                         modemState?.copy(sim2CellLock = newCellLock!!)
+                                }
+
+                                if (newPlmnLock != null) {
+                                    val slot = sim - 1
+                                    modemState = if (slot == 0)
+                                        modemState?.copy(sim1PlmnLock = newPlmnLock!!)
+                                    else
+                                        modemState?.copy(sim2PlmnLock = newPlmnLock!!)
                                 }
                             }
                         }
@@ -430,6 +463,40 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     },
+                    onCellLockClearPlmn = { sim ->
+                        scope.launch {
+                            modemLock.withLock {
+                                var newPlmnLock: PlmnLockState? = null
+                                var errorMsg: String? = null
+                                withContext(Dispatchers.IO) {
+                                    try {
+                                        val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
+                                        if (!simResp.ok) {
+                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            return@withContext
+                                        }
+                                        val resp = JsonStateParser.parseResponse(daemonManager.plmnLockClear())
+                                        if (!resp.ok) errorMsg = resp.error?.message
+                                        delay(200)
+                                        val resp2 = JsonStateParser.parseResponse(daemonManager.simSet(sim))
+                                        newPlmnLock = resp2.plmnLockState ?: resp.plmnLockState
+                                    } catch (e: Exception) {
+                                        errorMsg = "Clear PLMN failed: ${e.message}"
+                                        AppLog.e(TAG, "CellLock clear PLMN: error", e)
+                                    }
+                                }
+                                if (newPlmnLock != null) {
+                                    val slot = sim - 1
+                                    modemState = if (slot == 0)
+                                        modemState?.copy(sim1PlmnLock = newPlmnLock!!)
+                                    else
+                                        modemState?.copy(sim2PlmnLock = newPlmnLock!!)
+                                }
+                                snackbarIsError = errorMsg != null
+                                snackbarMessage = errorMsg ?: "Cleared PLMN lock for SIM $sim"
+                            }
+                        }
+                    },
                     cellLockResult = cellLockResult,
                     onCellLockResultConsumed = { cellLockResult = null },
                     cellLockRefreshing = cellLockRefreshing,
@@ -438,6 +505,7 @@ class MainActivity : ComponentActivity() {
                             cellLockRefreshing = true
                             modemLock.withLock {
                                 var newCellLock: CellLockState? = null
+                                var newPlmnLock: PlmnLockState? = null
                                 var errorMsg: String? = null
                                 withContext(Dispatchers.IO) {
                                     try {
@@ -448,6 +516,7 @@ class MainActivity : ComponentActivity() {
                                         val resp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         if (resp.ok) {
                                             newCellLock = resp.cellLockState
+                                            newPlmnLock = resp.plmnLockState
                                         } else {
                                             errorMsg = resp.error?.message ?: "Refresh failed"
                                         }
@@ -463,6 +532,13 @@ class MainActivity : ComponentActivity() {
                                     else
                                         modemState?.copy(sim2CellLock = newCellLock!!)
                                     cellLockRefreshKey++
+                                }
+                                if (newPlmnLock != null) {
+                                    val slot = cellLockSelectedSim
+                                    modemState = if (slot == 0)
+                                        modemState?.copy(sim1PlmnLock = newPlmnLock!!)
+                                    else
+                                        modemState?.copy(sim2PlmnLock = newPlmnLock!!)
                                 }
                                 if (errorMsg != null) {
                                     snackbarIsError = true

@@ -194,6 +194,56 @@
  *   nr_cell_lock_arfcn_set, nr_cell_lock_multi_pci_set,
  *   nr_cell_lock_gnb_set, nr_cell_lock_clear. New state fields:
  *   "lte_cell_lock", "nr_cell_lock". See qcom-bandlockd-app-interface.md.
+ *
+ * v4.3.0 -- PLMN (manual network selection) lock:
+ *   QMI_NAS_SET_SYSTEM_SELECTION_PREFERENCE (NAS message id 0x0033 --
+ *   the SAME message id MSG_SET already is, used throughout this file for
+ *   RAT/GSM/WCDMA/LTE/NR band and mode preferences) has an optional TLV
+ *   0x16, "Network Selection Preference", not previously implemented
+ *   here: enum8 net_sel_pref (0x00=AUTOMATIC, 0x01=MANUAL) + uint16 mcc +
+ *   uint16 mnc (5 bytes total). GET (message id 0x0034, MSG_GET) reports
+ *   the same TLV id with the same 5-byte shape -- unlike some of this
+ *   device's other fields (e.g. NR-SA/NR-NSA, TLV 0x2C/0x2D on GET vs
+ *   0x2F/0x30 on SET), this one is NOT split by direction. Sent the same
+ *   incremental way every other setter in this file uses: TLV_DURATION
+ *   (0x17) plus the one TLV being changed, nothing else. query() now also
+ *   parses TLV 0x16 out of every GET reply (same TLV walk as RAT/GSM/LTE/
+ *   NR, no separate round trip needed), so PLMN lock state is included in
+ *   every response's "state.plmn_lock" field for free. New commands:
+ *   plmn_lock_set (fields "mcc","mnc", each 0-999), plmn_lock_clear (no
+ *   fields, returns to AUTOMATIC). See jplmn_lock()/cmd_plmn_lock_set()/
+ *   cmd_plmn_lock_clear() below and qcom-bandlockd-app-interface.md.
+ *
+ * v4.3.1 -- Confirmed locked-PLMN report (TLV 0x1B):
+ *   TLV 0x16 (v4.3.0, above) is the network selection *preference* --
+ *   what was asked for. A separate GET-only TLV, 0x1B "Manual Network
+ *   Selection PLMN", is the authoritative report of which PLMN the modem
+ *   actually has locked/registered to, and unlike TLV 0x16 it carries
+ *   mnc_includes_pcs_digit (mcc:u16, mnc:u16, mnc_includes_pcs_digit:bool,
+ *   5 bytes), needed to tell a reported MNC of 90 apart from 090. query()
+ *   now also parses this (same TLV walk, still no extra round trip), into
+ *   the new "state.plmn_lock.locked_plmn" field -- null until TLV 0x1B
+ *   has actually been seen in a GET reply, otherwise an object with raw
+ *   "mcc"/"mnc"/"mnc_includes_pcs_digit" plus a convenience pre-padded
+ *   "mnc_display" string ("090" vs "90") so the app doesn't have to
+ *   reimplement that logic. No new commands -- this rides along with the
+ *   existing "query"/every other query. See jplmn_lock()/jmnc_padded().
+ *
+ * v4.3.2 -- plmn_lock.valid fix (field-confirmed device behavior):
+ *   A real device was found that never includes TLV 0x16 in its GET
+ *   replies at all, only TLV 0x1B -- a "refresh" right after a successful
+ *   plmn_lock_set showed "locked_plmn" fully populated while TLV 0x16 was
+ *   simply absent from that same reply. state.plmn_lock's top-level
+ *   "valid" was, until this version, tied to TLV 0x16 alone
+ *   (s->netsel_valid) -- meaning on that device the whole object looked
+ *   invalid to the app even though "locked_plmn" had real, useful data.
+ *   "valid" is now s->netsel_valid || s->manual_plmn_valid (true if
+ *   EITHER TLV showed up in the last GET). The app-facing implication:
+ *   don't gate reading "locked_plmn" on "valid" being true first --
+ *   check "locked_plmn" for null directly; it's independent of "valid"
+ *   and of "mode"/"mode_raw"/"mcc"/"mnc" (which remain specifically tied
+ *   to TLV 0x16 and can be null while "locked_plmn" is populated, as on
+ *   this device). No wire-format or TLV-parsing change, JSON-shape-only.
  */
 
 typedef unsigned char u8;
@@ -230,6 +280,8 @@ enum { AF_UNIX=1,AF_QIPCRTR=42,SOCK_STREAM=1,SOCK_DGRAM=2,SOL_SOCKET=1,SO_RCVTIM
 #define TLV_NR_SA_SET 0x2Fu   /* write id for an independent NR-SA lock */
 #define TLV_NR_NSA_SET 0x30u  /* write id for an independent NR-NSA lock */
 #define TLV_NR_MODE 0x2Eu
+#define TLV_NET_SEL_PREF 0x16u /* Network Selection Preference -- SAME id and SAME 5-byte value (enum8 net_sel_pref, uint16 mcc, uint16 mnc) on both SET (0x0033) and GET (0x0034), unlike some of this device's other fields. See the v4.3.0 header note. */
+#define TLV_MANUAL_PLMN 0x1Bu  /* "Manual Network Selection PLMN" -- GET (0x0034) reply only, distinct from TLV 0x16. This is the authoritative report of which PLMN is actually locked/registered, and it's the only one of the two that carries mnc_includes_pcs_digit (needed to know whether a reported MNC of e.g. 90 means 090 or 90). Value: mcc:u16 LE, mnc:u16 LE, mnc_includes_pcs_digit:bool (5 bytes). See the v4.3.1 header note. */
 
 /* ── Cell lock: a separate QMI feature from the band-family locking above.
  * Its own message ids, and TLV ids that are only meaningful *within* those
@@ -267,7 +319,7 @@ enum { AF_UNIX=1,AF_QIPCRTR=42,SOCK_STREAM=1,SOCK_DGRAM=2,SOL_SOCKET=1,SO_RCVTIM
 #define NR_CELL_MULTI_PCI_MAX 64u  /* cap on multi-PCI SET request PCI list, matches qcom-cell-lock-test.c's own cap */
 #define NR_CELL_GNB_MAX 32u        /* cap on gNodeB allow-list SET/GET entries, matches qcom-cell-lock-test.c's own cap */
 
-#define DAEMON_VERSION "4.2.0"
+#define DAEMON_VERSION "4.3.2"
 
 struct sockaddr_qrtr{u16 family,pad;u32 node,port;};
 struct qrtr_ctrl_pkt{u32 command,service,instance,node,port;};
@@ -339,6 +391,8 @@ struct state{
  int sa_present,nsa_present;
  u8 hw_legacy[8],hw_lte[32],hw_nr[64];int hw_valid;
  int nr_mode[2],nr_mode_known[2];
+ int netsel_valid;u8 net_sel_pref;u16 plmn_mcc,plmn_mnc; /* TLV 0x16, see v4.3.0 header note */
+ int manual_plmn_valid;u16 manual_plmn_mcc,manual_plmn_mnc;int manual_plmn_pcs; /* TLV 0x1B, see v4.3.1 header note -- distinct from the TLV 0x16 fields above */
  char status[160];
  int verbose;
  struct opresult last_op;
@@ -578,7 +632,23 @@ static int parse_result(const u8*r,u32 n,u16*result,u16*error){
 }
 static int result_ok(const u8*r,u32 n){u16 res=0,err=0;if(!parse_result(r,n,&res,&err))return 0;return res==0;}
 static int bind_sim(struct state*s,int sim){u8 p[4]={1,1,0,0},r[128];u32 n;p[3]=(u8)(sim-1);if(!exchange(s,MSG_BIND,p,4,r,sizeof(r),&n)||!result_ok(r,n)){setstatus(s,"SIM bind failed.");return 0;}s->sim=sim;return 1;}
-static int query(struct state*s){u8 r[2048];u32 n,p,e;zero(s->legacy,8);zero(s->lte,8);zero(s->extlte,32);zero(s->sa,64);zero(s->nsa,64);s->sa_present=0;s->nsa_present=0;s->rat=0;if(!exchange(s,MSG_GET,0,0,r,sizeof(r),&n)||!result_ok(r,n)){s->valid=0;setstatus(s,"State query failed.");return 0;}e=7u+le16(r+5);if(e>n)e=n;for(p=7;p+3<=e;){u8 id=r[p];u16 l=le16(r+p+1);const u8*v=r+p+3;if(p+3u+l>e)break;if(id==TLV_MODE&&l>=2)s->rat=le16(v);else if(id==TLV_LEGACY&&l==8)copy(s->legacy,v,8);else if(id==TLV_LTE&&l==8)copy(s->lte,v,8);else if(id==TLV_EXT_LTE_GET&&l==32)copy(s->extlte,v,32);else if(id==TLV_NR_SA_GET&&l==64){copy(s->sa,v,64);s->sa_present=1;}else if(id==TLV_NR_NSA_GET&&l==64){copy(s->nsa,v,64);s->nsa_present=1;}
+static int query(struct state*s){u8 r[2048];u32 n,p,e;zero(s->legacy,8);zero(s->lte,8);zero(s->extlte,32);zero(s->sa,64);zero(s->nsa,64);s->sa_present=0;s->nsa_present=0;s->rat=0;s->netsel_valid=0;s->net_sel_pref=0;s->plmn_mcc=0;s->plmn_mnc=0;s->manual_plmn_valid=0;s->manual_plmn_mcc=0;s->manual_plmn_mnc=0;s->manual_plmn_pcs=0;if(!exchange(s,MSG_GET,0,0,r,sizeof(r),&n)||!result_ok(r,n)){s->valid=0;setstatus(s,"State query failed.");return 0;}e=7u+le16(r+5);if(e>n)e=n;for(p=7;p+3<=e;){u8 id=r[p];u16 l=le16(r+p+1);const u8*v=r+p+3;if(p+3u+l>e)break;if(id==TLV_MODE&&l>=2)s->rat=le16(v);else if(id==TLV_LEGACY&&l==8)copy(s->legacy,v,8);else if(id==TLV_LTE&&l==8)copy(s->lte,v,8);else if(id==TLV_EXT_LTE_GET&&l==32)copy(s->extlte,v,32);else if(id==TLV_NR_SA_GET&&l==64){copy(s->sa,v,64);s->sa_present=1;}else if(id==TLV_NR_NSA_GET&&l==64){copy(s->nsa,v,64);s->nsa_present=1;}
+ /* v4.3.0: TLV 0x16, "Network Selection Preference" -- SAME id and SAME
+    5-byte shape (net_sel_pref:u8, mcc:u16 LE, mnc:u16 LE) on both this
+    GET reply and the SET request cmd_plmn_lock_set()/cmd_plmn_lock_clear()
+    build below. Guarded to length>=5 for the usual reason. */
+ else if(id==TLV_NET_SEL_PREF&&l>=5){
+  s->netsel_valid=1;s->net_sel_pref=v[0];s->plmn_mcc=le16(v+1);s->plmn_mnc=le16(v+3);
+ }
+ /* v4.3.1: TLV 0x1B, "Manual Network Selection PLMN" -- GET-only, distinct
+    from TLV 0x16 above. This is the authoritative "which PLMN is actually
+    locked" report, and unlike TLV 0x16's own mcc/mnc it carries
+    mnc_includes_pcs_digit, needed to know whether a reported MNC value
+    like 90 means 090 (3-digit) or 90 (2-digit). Value shape: mcc:u16 LE,
+    mnc:u16 LE, mnc_includes_pcs_digit:bool (byte 4). */
+ else if(id==TLV_MANUAL_PLMN&&l>=5){
+  s->manual_plmn_valid=1;s->manual_plmn_mcc=le16(v);s->manual_plmn_mnc=le16(v+2);s->manual_plmn_pcs=v[4]?1:0;
+ }
  /* Confirmed by a live capture (mode sa/nsa/both, each followed by a GET):
     on GET, id 0x2B ("NR_COMBINED" -- the same id the "nr" command uses on
     SET for a 64-byte combined band mask) is reused for a 4-byte current
@@ -901,6 +971,37 @@ static int cmd_mode(struct state*s,char*a){
  pos=addtlv(p,pos,TLV_NR_MODE,m,4);
  if(!setter(s,p,(u16)pos))return 0;
  if(s->sim>=1&&s->sim<=2){s->nr_mode[s->sim-1]=value;s->nr_mode_known[s->sim-1]=1;}
+ return 1;
+}
+
+/* v4.3.0 PLMN lock -- sends TLV_DURATION (0x17) + TLV_NET_SEL_PREF (0x16,
+ * net_sel_pref=0x01 MANUAL, mcc, mnc), same incremental single-purpose
+ * pattern as every other setter here. Caller (do_command()) validates
+ * mcc/mnc are each 0-999 before calling this; not re-validated here.
+ * Updates s->netsel_valid/net_sel_pref/plmn_mcc/plmn_mnc immediately on
+ * success, same reasoning as cmd_mode() above and the gsm_set/wcdma_set
+ * "update state directly, skip the post-SET query" note in do_command()
+ * -- an immediate GET right after a SET can race the modem and read back
+ * the pre-change value; the app doesn't need to wait for that when this
+ * function already knows exactly what was just written. */
+static int cmd_plmn_lock_set(struct state*s,u32 mcc,u32 mnc){
+ u8 p[16],d=1,v[5];int pos=0;
+ v[0]=0x01;put16(v+1,(u16)mcc);put16(v+3,(u16)mnc);
+ pos=addtlv(p,pos,TLV_DURATION,&d,1);
+ pos=addtlv(p,pos,TLV_NET_SEL_PREF,v,5);
+ if(!setter(s,p,(u16)pos))return 0;
+ s->netsel_valid=1;s->net_sel_pref=0x01;s->plmn_mcc=(u16)mcc;s->plmn_mnc=(u16)mnc;
+ return 1;
+}
+/* Clears a PLMN lock: net_sel_pref=0x00 AUTOMATIC, mcc/mnc zeroed (ignored
+ * by the modem per spec when AUTOMATIC and no RAT-preference TLV 0x22 is
+ * present, which this never sends). */
+static int cmd_plmn_lock_clear(struct state*s){
+ u8 p[16],d=1,v[5]={0,0,0,0,0};int pos=0;
+ pos=addtlv(p,pos,TLV_DURATION,&d,1);
+ pos=addtlv(p,pos,TLV_NET_SEL_PREF,v,5);
+ if(!setter(s,p,(u16)pos))return 0;
+ s->netsel_valid=1;s->net_sel_pref=0x00;s->plmn_mcc=0;s->plmn_mnc=0;
  return 1;
 }
 
@@ -1308,6 +1409,58 @@ static void jnr_cell_lock(char*b,u32*pos,u32 cap,const struct state*s){
  } else jput(b,pos,cap,"null");
  jputc(b,pos,cap,'}');
 }
+/* Emits a zero-padded MNC as a JSON string, e.g. "090" vs "90", using the
+ * mnc_includes_pcs_digit flag TLV 0x1B carries (TLV 0x16 has no such flag,
+ * so its own mnc is only ever emitted as a plain number -- see below). */
+static void jmnc_padded(char*b,u32*pos,u32 cap,u16 mnc,int pcs){
+ char t[4];int n=0,width=pcs?3:2,i;u32 v=mnc;
+ if(!v)t[n++]='0';else while(v){t[n++]=(char)('0'+v%10);v/=10;}
+ jputc(b,pos,cap,'"');
+ for(i=n;i<width;i++)jputc(b,pos,cap,'0');
+ for(i=n-1;i>=0;i--)jputc(b,pos,cap,t[i]);
+ jputc(b,pos,cap,'"');
+}
+/* v4.3.0/v4.3.1/v4.3.2. "mode"/"mode_raw"/"mcc"/"mnc" are TLV 0x16 (the
+ * network selection preference itself), null until that specific TLV has
+ * been seen (s->netsel_valid); "locked_plmn" is the separate, independent
+ * TLV 0x1B report of which PLMN is actually locked, null until THAT
+ * specific TLV has been seen (s->manual_plmn_valid).
+ *
+ * v4.3.2: top-level "valid" is s->netsel_valid || s->manual_plmn_valid,
+ * not just s->netsel_valid as it briefly was in v4.3.0/v4.3.1. Field-
+ * confirmed on a real device: some firmware never includes TLV 0x16 in a
+ * GET reply at all (a "refresh" after a successful plmn_lock_set showed
+ * "locked_plmn" fully populated from TLV 0x1B, while TLV 0x16 was simply
+ * absent from that same reply). Gating the whole object's "valid" on 0x16
+ * alone made that device's plmn_lock look entirely invalid to the app
+ * even though real, useful data was sitting right there in
+ * "locked_plmn" -- so don't check top-level "valid" before looking at
+ * "locked_plmn"; check "locked_plmn" for null directly, independent of
+ * "valid"/"mode". "valid" now only means "at least one of the two TLVs
+ * showed up in the last GET", not "both did". */
+static void jplmn_lock(char*b,u32*pos,u32 cap,const struct state*s){
+ jputc(b,pos,cap,'{');
+ jput(b,pos,cap,"\"valid\":");jbool(b,pos,cap,s->netsel_valid||s->manual_plmn_valid);
+ if(s->netsel_valid){
+  jput(b,pos,cap,",\"mode\":");
+  jstr(b,pos,cap,s->net_sel_pref==0x01?"manual":(s->net_sel_pref==0x00?"automatic":"unknown"));
+  jput(b,pos,cap,",\"mode_raw\":");jint(b,pos,cap,s->net_sel_pref);
+  jput(b,pos,cap,",\"mcc\":");jint(b,pos,cap,s->plmn_mcc);
+  jput(b,pos,cap,",\"mnc\":");jint(b,pos,cap,s->plmn_mnc);
+ } else {
+  jput(b,pos,cap,",\"mode\":null,\"mode_raw\":null,\"mcc\":null,\"mnc\":null");
+ }
+ jput(b,pos,cap,",\"locked_plmn\":");
+ if(s->manual_plmn_valid){
+  jputc(b,pos,cap,'{');
+  jput(b,pos,cap,"\"mcc\":");jint(b,pos,cap,s->manual_plmn_mcc);
+  jput(b,pos,cap,",\"mnc\":");jint(b,pos,cap,s->manual_plmn_mnc);
+  jput(b,pos,cap,",\"mnc_includes_pcs_digit\":");jbool(b,pos,cap,s->manual_plmn_pcs);
+  jput(b,pos,cap,",\"mnc_display\":");jmnc_padded(b,pos,cap,s->manual_plmn_mnc,s->manual_plmn_pcs);
+  jputc(b,pos,cap,'}');
+ } else jput(b,pos,cap,"null");
+ jputc(b,pos,cap,'}');
+}
 static void jstate(char*b,u32*pos,u32 cap,struct state*s){
  jputc(b,pos,cap,'{');
  jput(b,pos,cap,"\"valid\":");jbool(b,pos,cap,s->valid);
@@ -1335,6 +1488,7 @@ static void jstate(char*b,u32*pos,u32 cap,struct state*s){
  jput(b,pos,cap,",\"nr_independent_capability\":");jcapability(b,pos,cap,s);
  jput(b,pos,cap,",\"lte_cell_lock\":");jlte_cell_lock(b,pos,cap,s);
  jput(b,pos,cap,",\"nr_cell_lock\":");jnr_cell_lock(b,pos,cap,s);
+ jput(b,pos,cap,",\"plmn_lock\":");jplmn_lock(b,pos,cap,s);
  jput(b,pos,cap,",\"status\":");jstr(b,pos,cap,s->status);
  jputc(b,pos,cap,'}');
 }
@@ -1461,6 +1615,18 @@ static void do_command(struct state*s,const char*req,int*ok,int*did_set,int*shut
     the idempotent-clear behavior when no NR cell lock is currently
     active. */
  if(eq(cmd,"nr_cell_lock_clear")){*ok=cmd_nr_cell_lock_clear(s);*did_set=0;return;}
+ /* v4.3.0 PLMN lock. did_set=0 for the same reason gsm_set/wcdma_set/the
+    cell-lock commands above use it: cmd_plmn_lock_set()/_clear() already
+    update s->netsel_valid/net_sel_pref/plmn_mcc/plmn_mnc directly on
+    success, so an immediate post-SET query() would only risk racing the
+    modem and reading back the pre-change value instead of adding anything. */
+ if(eq(cmd,"plmn_lock_set")){
+  s64 mcc=0,mnc=0;
+  if(!json_get_int(req,"mcc",&mcc)||mcc<0||mcc>999){setstatus(s,"Field 'mcc' must be an integer 0-999.");set_stage(stage,stage_cap,"bad_request");return;}
+  if(!json_get_int(req,"mnc",&mnc)||mnc<0||mnc>999){setstatus(s,"Field 'mnc' must be an integer 0-999.");set_stage(stage,stage_cap,"bad_request");return;}
+  *ok=cmd_plmn_lock_set(s,(u32)mcc,(u32)mnc);*did_set=0;return;
+ }
+ if(eq(cmd,"plmn_lock_clear")){*ok=cmd_plmn_lock_clear(s);*did_set=0;return;}
  if(eq(cmd,"mode_set")){
   if(!json_get_string(req,"mode",arg,sizeof(arg))){setstatus(s,"Missing 'mode' string field (\"sa\"/\"nsa\"/\"both\").");set_stage(stage,stage_cap,"bad_request");return;}
   *ok=cmd_mode(s,arg);*did_set=*ok;return;
