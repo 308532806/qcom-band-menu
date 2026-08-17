@@ -244,6 +244,30 @@
  *   and of "mode"/"mode_raw"/"mcc"/"mnc" (which remain specifically tied
  *   to TLV 0x16 and can be null while "locked_plmn" is populated, as on
  *   this device). No wire-format or TLV-parsing change, JSON-shape-only.
+ *
+ * v4.3.4 -- reset no longer fails whole on a known-unsupported NR domain:
+ *   Field-observed on a real device (via nr_independent_capability, which
+ *   already runs automatically at startup): independent NR-SA/NR-NSA SET
+ *   (TLV 0x2F/0x30) rejected with result=1/code=17 on that device, exactly
+ *   as the SA/NSA capability probe had already predicted -- but
+ *   cmd_reset() unconditionally attempted both anyway after the combined
+ *   NR mask (0x2B) had already restored successfully, so that one
+ *   predictable rejection failed the *entire* reset command, discarding
+ *   the GSM/WCDMA/LTE/combined-NR restoration that had already succeeded
+ *   (setter() failure makes cmd_reset() return 0 immediately). cmd_reset()
+ *   now checks s->nr_cap (from the same probe) before attempting each of
+ *   the independent SA/NSA SETs, and skips (does not attempt) whichever
+ *   domain(s) the probe already found rejected (sa_supported/nsa_supported
+ *   == 0) -- the combined NR mask sent earlier in the same call is this
+ *   project's established fallback for that case, so nothing is left
+ *   unrestored, just not redundantly (and predictably-failingly)
+ *   re-attempted. Domains the probe reports as unknown (never probed, or
+ *   the corresponding current mask wasn't present -- sa_supported/
+ *   nsa_supported == -1) still get attempted, same as before this
+ *   version, since "unknown" isn't evidence it will fail. The final
+ *   status message says so explicitly when anything was skipped, instead
+ *   of unconditionally reporting a full restore. No new commands or
+ *   fields -- see cmd_reset() below.
  */
 
 typedef unsigned char u8;
@@ -319,7 +343,7 @@ enum { AF_UNIX=1,AF_QIPCRTR=42,SOCK_STREAM=1,SOCK_DGRAM=2,SOL_SOCKET=1,SO_RCVTIM
 #define NR_CELL_MULTI_PCI_MAX 64u  /* cap on multi-PCI SET request PCI list, matches qcom-cell-lock-test.c's own cap */
 #define NR_CELL_GNB_MAX 32u        /* cap on gNodeB allow-list SET/GET entries, matches qcom-cell-lock-test.c's own cap */
 
-#define DAEMON_VERSION "4.3.2"
+#define DAEMON_VERSION "4.3.4"
 
 struct sockaddr_qrtr{u16 family,pad;u32 node,port;};
 struct qrtr_ctrl_pkt{u32 command,service,instance,node,port;};
@@ -924,6 +948,7 @@ static int cmd_wcdma(struct state*s,char*a){u32 v[32];int c,i,b,pos=0,bad=0;u64 
  * see the .md spec's "Known limitations" section. */
 static int cmd_reset(struct state*s){
  u8 legacy[8],p[80],d=1;int pos,i,has_lte_high=0,any_lte=0,any_nr=0;
+ int skipped_sa=0,skipped_nsa=0;
  if(!s->hw_valid&&!query_hardware(s))return 0;
 
  /* GSM + WCDMA: the DMS legacy capability mask already contains both. */
@@ -942,18 +967,42 @@ static int cmd_reset(struct state*s){
 
  for(i=0;i<64;i++)if(s->hw_nr[i]){any_nr=1;break;}
 
- /* Restore combined NR, independent SA, and independent NSA masks.
-    Skip NR SETs on devices with no NR hardware capability. */
+ /* Restore combined NR, then independent SA and independent NSA masks.
+    Skip NR SETs entirely on devices with no NR hardware capability.
+    v4.3.4: independent SA/NSA restoration is now skipped (not attempted
+    at all) on a domain the capability probe already knows this device
+    rejects (s->nr_cap.sa_supported/nsa_supported == 0 -- a definite,
+    already-observed rejection, not just "unknown"/"never probed", which
+    still fall through to attempting it as before). The combined NR mask
+    just sent above is this project's established fallback for exactly
+    that case -- it's what actually governs NR bands on a device without
+    independent-domain support, so skipping the redundant, predictably-
+    rejected independent SETs doesn't leave NR bands unrestored, it just
+    stops turning a known, avoidable rejection into a hard failure of the
+    whole reset after GSM/WCDMA/LTE/combined-NR had already succeeded. */
  if(any_nr){
   pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_COMBINED,s->hw_nr,64);
   if(!setter(s,p,(u16)pos))return 0;
-  pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_SA_SET,s->hw_nr,64);
-  if(!setter(s,p,(u16)pos))return 0;
-  pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_NSA_SET,s->hw_nr,64);
-  if(!setter(s,p,(u16)pos))return 0;
+
+  if(s->nr_cap.ran&&s->nr_cap.sa_supported==0){
+   skipped_sa=1;
+  } else {
+   pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_SA_SET,s->hw_nr,64);
+   if(!setter(s,p,(u16)pos))return 0;
+  }
+  if(s->nr_cap.ran&&s->nr_cap.nsa_supported==0){
+   skipped_nsa=1;
+  } else {
+   pos=0;pos=addtlv(p,pos,TLV_DURATION,&d,1);pos=addtlv(p,pos,TLV_NR_NSA_SET,s->hw_nr,64);
+   if(!setter(s,p,(u16)pos))return 0;
+  }
  }
 
- setstatus(s,"All band masks restored to hardware-supported bands.");
+ if(skipped_sa||skipped_nsa){
+  setstatus(s,"Band masks restored (independent NR SA/NSA skipped -- not supported on this device; combined NR mask was used instead).");
+ } else {
+  setstatus(s,"All band masks restored to hardware-supported bands.");
+ }
  return 1;
 }
 
