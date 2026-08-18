@@ -95,7 +95,7 @@ fun CellLockScreen(
     backdrop: Backdrop? = null
 ) {
     val density = LocalDensity.current
-    val navbarHeightDp = with(density) { 128f.toDp() }
+    val navbarHeightDp = 64.dp
     val navInset = WindowInsets.navigationBars.asPaddingValues(density).calculateBottomPadding()
     val navbarSpace = navbarHeightDp + 16.dp + navInset
     val statusBarInset = WindowInsets.statusBars.asPaddingValues(density).calculateTopPadding()

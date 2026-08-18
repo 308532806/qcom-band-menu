@@ -72,7 +72,7 @@ import kotlin.math.sign
 
 val LocalFloatingBottomBarTabScale = staticCompositionLocalOf { { 1f } }
 
-private const val BAR_HEIGHT_PX = 128f
+private val BAR_HEIGHT = 64.dp
 private val BarCorner = RoundedCornerShape(50)
 
 @Composable
@@ -130,8 +130,7 @@ fun FloatingBottomBar(
 
     val tabsBackdrop = rememberLayerBackdrop(onDraw = { drawContent() })
     val density = LocalDensity.current
-    // Fixed pixel height — does not scale with DPI
-    val barHeightDp = with(density) { BAR_HEIGHT_PX.toDp() }
+    val barHeightDp = BAR_HEIGHT
     val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
     val animationScope = rememberCoroutineScope()
 

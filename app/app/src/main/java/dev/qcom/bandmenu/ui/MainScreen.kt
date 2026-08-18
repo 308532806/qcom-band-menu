@@ -183,7 +183,7 @@ fun MainScreen(
             // Snackbar overlay (above the floating navbar)
             val density = LocalDensity.current
             val navInset = WindowInsets.navigationBars.asPaddingValues(density).calculateBottomPadding()
-            val navbarHeightDp = with(density) { 128f.toDp() }
+            val navbarHeightDp = 64.dp
             // Bands page has Apply/Reset buttons (~72dp) at the bottom, so the snackbar
             // needs extra clearance. Cells and Info pages have no buttons.
             val buttonSpace = if (selectedIndex == 0) 62.dp else 0.dp
