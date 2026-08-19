@@ -54,8 +54,7 @@ jobs:
             --body "$key_password"
 
           gh secret delete BOOTSTRAP_PAT \
-            --repo "$GITHUB_REPOSITORY" \
-            --confirm
+            --repo "$GITHUB_REPOSITORY"
 
           rm -f "$keystore"
           echo "Release signing secrets initialized."
