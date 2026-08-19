@@ -6,7 +6,7 @@ Apply cellular forcings such as RAT preferences, band locking, and 5G-NR modes t
 
 The Android app in this fork uses Simplified Chinese UI text. Every source push to `main`, as well as a manual run from the **Actions** tab, reapplies the translation and builds a release APK with GitHub Actions.
 
-Download the `qcom-band-menu-cn-release` artifact from a completed workflow run. The app still requires a Qualcomm device running Android 11 or newer and root access.
+Download the signed `qcom-band-menu-cn-release.apk` from the repository's **Releases** section. The app still requires a Qualcomm device running Android 11 or newer and root access.
 
 # Features
 
