@@ -129,6 +129,43 @@ data class DaemonError(
     val rejectedBands: Set<Int>?
 )
 
+val DaemonError.localizedMessage: String
+    get() = when (message) {
+        "Unknown error" -> "未知错误"
+        "NAS discovery failed." -> "NAS 服务发现失败"
+        "NAS socket failed." -> "NAS 套接字创建失败"
+        "SIM bind failed." -> "SIM 绑定失败"
+        "State query failed." -> "读取状态失败"
+        "Hardware-band service discovery failed." -> "硬件频段服务发现失败"
+        "Hardware-band query failed." -> "查询硬件频段失败"
+        "LTE cell-lock query failed: no reply." -> "查询 LTE 小区锁定失败：无响应"
+        "LTE cell-lock query failed." -> "查询 LTE 小区锁定失败"
+        "NR cell-lock query failed: no reply." -> "查询 NR 小区锁定失败：无响应"
+        "NR cell-lock query failed." -> "查询 NR 小区锁定失败"
+        "Command failed: no reply." -> "命令失败：无响应"
+        "Command failed: malformed reply (no result TLV)." ->
+            "命令失败：响应格式错误（缺少结果 TLV）"
+        "Command rejected by modem." -> "基带拒绝了命令"
+        "No hardware-supported LTE bands were reported." ->
+            "未报告硬件支持的 LTE 频段"
+        "No hardware-supported NR bands were reported." ->
+            "未报告硬件支持的 NR 频段"
+        "LTE command not sent." -> "LTE 命令未发送"
+        "Invalid LTE list." -> "LTE 频段列表无效"
+        "NR command not sent." -> "NR 命令未发送"
+        "Invalid NR list." -> "NR 频段列表无效"
+        "GSM command not sent." -> "GSM 命令未发送"
+        "Invalid GSM list." -> "GSM 频段列表无效"
+        "WCDMA command not sent." -> "WCDMA 命令未发送"
+        "Invalid WCDMA list." -> "WCDMA 频段列表无效"
+        "Reset failed: no hardware LTE bands reported." ->
+            "重置失败：未报告硬件支持的 LTE 频段"
+        "Refresh failed: could not reconnect." -> "刷新失败：无法重新连接"
+        "SIM switch failed." -> "SIM 切换失败"
+        "Unknown command." -> "未知命令"
+        else -> message
+    }
+
 object JsonRequestBuilder {
 
     fun query(): JSONObject = JSONObject().put("cmd", "query")

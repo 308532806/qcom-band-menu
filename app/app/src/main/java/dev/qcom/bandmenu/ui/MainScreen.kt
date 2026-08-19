@@ -163,19 +163,19 @@ fun MainScreen(
                     tabsCount = 3
                 ) {
                     FloatingBottomBarItem(onClick = { selectedIndex = 0 }) {
-                        Icon(imageVector = MiuixIcons.Phone, contentDescription = "Bands",
+                        Icon(imageVector = MiuixIcons.Phone, contentDescription = "频段",
                             tint = MiuixTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
-                        Text("Bands", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
+                        Text("频段", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
                     }
                     FloatingBottomBarItem(onClick = { selectedIndex = 1 }) {
-                        Icon(imageVector = MiuixIcons.Search, contentDescription = "Cells",
+                        Icon(imageVector = MiuixIcons.Search, contentDescription = "小区",
                             tint = MiuixTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
-                        Text("Cells", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
+                        Text("小区", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
                     }
                     FloatingBottomBarItem(onClick = { selectedIndex = 2 }) {
-                        Icon(imageVector = MiuixIcons.Info, contentDescription = "Info",
+                        Icon(imageVector = MiuixIcons.Info, contentDescription = "关于",
                             tint = MiuixTheme.colorScheme.onBackground, modifier = Modifier.size(18.dp))
-                        Text("Info", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
+                        Text("关于", style = MiuixTheme.textStyles.body2.copy(fontSize = 12.sp))
                     }
                 }
             }
@@ -233,12 +233,12 @@ fun MainScreen(
             if (showRootDeniedDialog) {
                 top.yukonga.miuix.kmp.window.WindowDialog(
                     show = true,
-                    title = "Root Access Required",
-                    summary = "This app requires root access to communicate with the Qualcomm modem. Please grant root access and retry.",
+                    title = "需要 Root 权限",
+                    summary = "此应用需要 Root 权限才能与高通基带通信，请授予 Root 权限后重试。",
                     onDismissRequest = onDismissRootDialog,
                     content = {
                         top.yukonga.miuix.kmp.basic.TextButton(
-                            text = "Retry",
+                            text = "重试",
                             onClick = onRootRetry,
                             modifier = Modifier.fillMaxWidth(),
                             colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.textButtonColorsPrimary()
@@ -255,7 +255,7 @@ fun MainScreen(
                     onDismissRequest = onDismissErrorDialog,
                     content = {
                         top.yukonga.miuix.kmp.basic.TextButton(
-                            text = "OK",
+                            text = "确定",
                             onClick = onDismissErrorDialog,
                             modifier = Modifier.fillMaxWidth()
                         )

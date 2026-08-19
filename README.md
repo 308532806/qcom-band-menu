@@ -2,6 +2,12 @@
 
 Apply cellular forcings such as RAT preferences, band locking, and 5G-NR modes through QMI commands over Android's QRTR interface. The project is available in both command-line and Android app versions.
 
+## Chinese Android build
+
+The Android app in this fork uses Simplified Chinese UI text. Every source push to `main`, as well as a manual run from the **Actions** tab, reapplies the translation and builds a release APK with GitHub Actions.
+
+Download the `qcom-band-menu-cn-release` artifact from a completed workflow run. The app still requires a Qualcomm device running Android 11 or newer and root access.
+
 # Features
 
 - Read/modify forcing profiles for SIM 1 and SIM 2

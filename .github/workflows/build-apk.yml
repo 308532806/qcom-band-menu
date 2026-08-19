@@ -1,0 +1,79 @@
+name: Build Chinese Release APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out app
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # The Android project uses these repositories as Gradle composite builds.
+      - name: Check out Miuix
+        uses: actions/checkout@v4
+        with:
+          repository: compose-miuix-ui/miuix
+          ref: main
+          path: miuix
+          fetch-depth: 1
+
+      - name: Check out AndroidLiquidGlass
+        uses: actions/checkout@v4
+        with:
+          repository: Kyant0/AndroidLiquidGlass
+          ref: kmp
+          path: AndroidLiquidGlass
+          fetch-depth: 1
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: app/**/*.gradle*
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform
+        run: sdkmanager "platforms;android-37"
+
+      - name: Reapply Chinese UI translation
+        run: python3 scripts/apply_zh_translation.py
+
+      - name: Commit translation updates
+        run: |
+          if git diff --quiet -- README.md .github app scripts; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md .github app scripts
+          git commit -m "chore: sync Chinese UI translation [skip ci]"
+          git push
+
+      - name: Build release APK
+        working-directory: app
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: qcom-band-menu-cn-release
+          path: app/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14

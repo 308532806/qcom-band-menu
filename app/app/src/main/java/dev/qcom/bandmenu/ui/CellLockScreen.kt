@@ -185,13 +185,13 @@ fun CellLockScreen(
                             .background(Color.Black.copy(alpha = 0.6f))
                     ) {
                         SmallTopAppBar(
-                            title = "Cell-Lock",
+                            title = "小区锁定",
                             color = Color.Transparent
                         )
                     }
                 } else {
                     SmallTopAppBar(
-                        title = "Cell-Lock"
+                        title = "小区锁定"
                     )
                 }
 
@@ -200,13 +200,13 @@ fun CellLockScreen(
                     listOf(
                         DropdownEntry(items = listOf(
                             DropdownItem(
-                                text = "Clear ALL",
+                                text = "清除全部",
                                 onClick = { onClearAll(selectedSim + 1) }
                             )
                         )),
                         DropdownEntry(items = listOf(
                             DropdownItem(
-                                text = "Clear 5G",
+                                text = "清除 5G",
                                 onClick = {
                                     val nrType = if (selectedSim == 0)
                                         modemState.sim1CellLock.nr.type
@@ -214,7 +214,7 @@ fun CellLockScreen(
                                         modemState.sim2CellLock.nr.type
                                     if (nrType == "none") {
                                         scope.launch {
-                                            snackbarHostState.showSnackbar("No 5G cell lock active")
+                                            snackbarHostState.showSnackbar("当前没有启用 5G 小区锁定")
                                         }
                                     } else {
                                         onClear5G(selectedSim + 1)
@@ -222,19 +222,19 @@ fun CellLockScreen(
                                 }
                             ),
                             DropdownItem(
-                                text = "Clear 4G",
+                                text = "清除 4G",
                                 onClick = { onClear4G(selectedSim + 1) }
                             )
                         )),
                         DropdownEntry(items = listOf(
                             DropdownItem(
-                                text = "Clear PLMN",
+                                text = "清除 PLMN",
                                 onClick = { onClearPlmn(selectedSim + 1) }
                             )
                         )),
                         DropdownEntry(items = listOf(
                             DropdownItem(
-                                text = "Enable Experimental",
+                                text = "启用实验功能",
                                 selected = experimentalEnabled,
                                 onClick = { experimentalEnabled = !experimentalEnabled }
                             )
@@ -244,19 +244,19 @@ fun CellLockScreen(
                     listOf(
                         DropdownEntry(items = listOf(
                             DropdownItem(
-                                text = "Clear ALL",
+                                text = "清除全部",
                                 onClick = { onClearAll(selectedSim + 1) }
                             )
                         )),
                         DropdownEntry(items = listOf(
                             DropdownItem(
-                                text = "Clear 4G",
+                                text = "清除 4G",
                                 onClick = { onClear4G(selectedSim + 1) }
                             )
                         )),
                         DropdownEntry(items = listOf(
                             DropdownItem(
-                                text = "Clear PLMN",
+                                text = "清除 PLMN",
                                 onClick = { onClearPlmn(selectedSim + 1) }
                             )
                         ))
@@ -269,7 +269,7 @@ fun CellLockScreen(
                 ) {
                     Icon(
                         imageVector = MiuixIcons.More,
-                        contentDescription = "Menu",
+                        contentDescription = "菜单",
                         tint = MiuixTheme.colorScheme.onBackground
                     )
                 }
@@ -343,9 +343,9 @@ private fun SimCellLockPage(
     LaunchedEffect(lockResult) {
         if (lockResult != null && lockResult.sim == simSlot + 1) {
             val override = if (lockResult.success) {
-                LabelOverride("Success locking ${lockResult.type} \u2713", GreenColor)
+                LabelOverride("已锁定 ${lockResult.type} \u2713", GreenColor)
             } else {
-                val msg = lockResult.message ?: "Rejected by modem"
+                val msg = lockResult.message ?: "基带拒绝了请求"
                 LabelOverride("$msg \u2717", RedColor)
             }
             labelOverrides = labelOverrides + (lockResult.fieldIndex to override)
@@ -358,22 +358,22 @@ private fun SimCellLockPage(
     val defaultLabels = remember {
         mapOf(
             0 to "NR-ARFCN SCS",
-            1 to "NR-ARFCN PCI SCS Band",
-            2 to "NR-ARFCN SCS Band PCI1 PCI2...",
-            3 to "\"ID bits 22-32\" gNB1 gNB2...",
+            1 to "NR-ARFCN PCI SCS 频段",
+            2 to "NR-ARFCN SCS 频段 PCI1 PCI2...",
+            3 to "\"ID 位数 22-32\" gNB1 gNB2...",
             4 to "EARFCN PCI",
-            5 to "MCC MNC (e.g. 244 01)"
+            5 to "MCC MNC（例如 244 01）"
         )
     }
 
     val fieldTitles = remember {
         mapOf(
-            0 to "NR-ARFCN lock: Put NR-ARFCN and SCS (in kHz)",
-            1 to "PCI lock: Put NR-ARFCN PCI SCS and Band",
-            2 to "MultiPCI lock: Put NR-ARFCN SCS Band and PCI list",
-            3 to "gNB lock: Put ID bits (22-32) and gNB IDs",
-            4 to "PCI lock: Put EARFCN and PCI",
-            5 to "PLMN lock: Put MCC and MNC (e.g. 244 01)"
+            0 to "NR-ARFCN 锁定：输入 NR-ARFCN 和 SCS（单位：kHz）",
+            1 to "PCI 锁定：输入 NR-ARFCN、PCI、SCS 和频段",
+            2 to "多 PCI 锁定：输入 NR-ARFCN、SCS、频段和 PCI 列表",
+            3 to "gNB 锁定：输入 ID 位数（22-32）和 gNB ID",
+            4 to "PCI 锁定：输入 EARFCN 和 PCI",
+            5 to "PLMN 锁定：输入 MCC 和 MNC（例如 244 01）"
         )
     }
 
@@ -527,7 +527,7 @@ private fun SimCellLockPage(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        SmallTitle("PLMN lock")
+            SmallTitle("PLMN 锁定")
 
         Text(
             fieldTitles[5]!!,

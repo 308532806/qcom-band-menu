@@ -176,10 +176,10 @@ fun BandLockScreen(
                             .fillMaxWidth()
                             .background(Color.Black.copy(alpha = 0.6f))
                     ) {
-                        SmallTopAppBar(title = "Bands", color = Color.Transparent)
+                        SmallTopAppBar(title = "频段", color = Color.Transparent)
                     }
                 } else {
-                    SmallTopAppBar(title = "Bands")
+                    SmallTopAppBar(title = "频段")
                 }
             }
 
@@ -192,7 +192,7 @@ fun BandLockScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 TextButton(
-                    text = "Reset",
+                    text = "重置",
                     onClick = {
                         hapticFeedback.performHapticFeedback(HapticFeedbackType.Confirm)
                         onReset(selectedSim)
@@ -222,7 +222,7 @@ fun BandLockScreen(
                         .border(1.dp, MiuixTheme.colorScheme.outline, RoundedCornerShape(16.dp)),
                     colors = ButtonDefaults.buttonColorsPrimary()
                 ) {
-                    Text("Apply")
+                    Text("应用")
                 }
             }
         }
@@ -262,7 +262,7 @@ private fun SimBandLockPage(
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        SmallTitle("RAT lock")
+        SmallTitle("网络制式锁定")
         val supportedRats = BandConstants.ALL_RAT_TYPES.filter { rt ->
             when (rt) {
                 RatType.GSM -> hardware.gsm.isNotEmpty()
@@ -272,15 +272,15 @@ private fun SimBandLockPage(
             }
         }
         val isAuto = supportedRats.all { state.ratChecked[it] == true }
-        val ratSummary = if (isAuto && supportedRats.isNotEmpty()) "AUTO (All RATs)"
-            else if (state.ratChecked.values.all { it != true } || supportedRats.isEmpty()) "None"
+        val ratSummary = if (isAuto && supportedRats.isNotEmpty()) "自动（全部制式）"
+            else if (state.ratChecked.values.all { it != true } || supportedRats.isEmpty()) "无"
             else supportedRats.filter { state.ratChecked[it] == true }.joinToString(", ") { it.name }
         Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             WindowDropdownPreference(
                 entries = listOf(
                     DropdownEntry(items = listOf(
                         DropdownItem(
-                            text = "AUTO (All RATs)",
+                            text = "自动（全部制式）",
                             selected = isAuto,
                             onClick = {
                                 val newAuto = !isAuto
@@ -298,7 +298,7 @@ private fun SimBandLockPage(
                         )
                     })
                 ),
-                title = "RAT lock",
+                title = "网络制式锁定",
                 summary = ratSummary,
                 showValue = false,
                 collapseOnSelection = false
@@ -307,7 +307,7 @@ private fun SimBandLockPage(
 
         if (hardware.nr.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
-            SmallTitle("NR mode")
+            SmallTitle("NR 模式")
             val nrModeIndex = when (state.nrMode) {
                 NrMode.BOTH, NrMode.UNKNOWN -> 0
                 NrMode.SA -> 1
@@ -335,7 +335,7 @@ private fun SimBandLockPage(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-        SmallTitle("Band lock")
+        SmallTitle("频段锁定")
         Spacer(modifier = Modifier.height(4.dp))
 
         val allNrEnabled = if (useIndependentLock)
@@ -367,37 +367,37 @@ private fun SimBandLockPage(
         val quickItems = if (useIndependentLock) {
             if (hasNrHardware) {
                 listOf(
-                    "All bands (all RATs)" to 0,
-                    "All 5G bands (NSA+SA)" to 1,
-                    "All NR-SA bands" to 2,
-                    "All NR-NSA bands" to 3,
-                    "All LTE bands" to 4,
-                    "All WCDMA bands" to 5,
-                    "All GSM bands" to 6
+                    "全部频段（所有制式）" to 0,
+                    "全部 5G 频段（NSA+SA）" to 1,
+                    "全部 NR-SA 频段" to 2,
+                    "全部 NR-NSA 频段" to 3,
+                    "全部 LTE 频段" to 4,
+                    "全部 WCDMA 频段" to 5,
+                    "全部 GSM 频段" to 6
                 )
             } else {
                 listOf(
-                    "All bands (all RATs)" to 0,
-                    "All LTE bands" to 4,
-                    "All WCDMA bands" to 5,
-                    "All GSM bands" to 6
+                    "全部频段（所有制式）" to 0,
+                    "全部 LTE 频段" to 4,
+                    "全部 WCDMA 频段" to 5,
+                    "全部 GSM 频段" to 6
                 )
             }
         } else {
             if (hasNrHardware) {
                 listOf(
-                    "All bands (all RATs)" to 0,
-                    "All NR bands" to 1,
-                    "All LTE bands" to 4,
-                    "All WCDMA bands" to 5,
-                    "All GSM bands" to 6
+                    "全部频段（所有制式）" to 0,
+                    "全部 NR 频段" to 1,
+                    "全部 LTE 频段" to 4,
+                    "全部 WCDMA 频段" to 5,
+                    "全部 GSM 频段" to 6
                 )
             } else {
                 listOf(
-                    "All bands (all RATs)" to 0,
-                    "All LTE bands" to 4,
-                    "All WCDMA bands" to 5,
-                    "All GSM bands" to 6
+                    "全部频段（所有制式）" to 0,
+                    "全部 LTE 频段" to 4,
+                    "全部 WCDMA 频段" to 5,
+                    "全部 GSM 频段" to 6
                 )
             }
         }
@@ -468,8 +468,8 @@ private fun SimBandLockPage(
                         })
                     })
                 },
-                title = "Quick selections",
-                summary = "Toggle band groups",
+                title = "快速选择",
+                summary = "切换频段组",
                 showValue = false,
                 collapseOnSelection = false
             )

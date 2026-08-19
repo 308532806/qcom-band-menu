@@ -101,10 +101,10 @@ class MainActivity : ComponentActivity() {
                         Handler(Looper.getMainLooper()).post {
                             if (restored) {
                                 snackbarIsError = false
-                                snackbarMessage = "Daemon connection restored"
+                                snackbarMessage = "守护进程连接已恢复"
                             } else {
                                 snackbarIsError = true
-                                snackbarMessage = "Daemon connection lost — retrying..."
+                                snackbarMessage = "守护进程连接已断开，正在重试……"
                             }
                         }
                     }
@@ -114,7 +114,7 @@ class MainActivity : ComponentActivity() {
                             isLoading = false
                         },
                         onLaunchFailed = { msg ->
-                            errorTitle = "Daemon Launch Failed"
+                            errorTitle = "守护进程启动失败"
                             errorMessage = msg
                             showErrorDialog = true
                             isLoading = false
@@ -135,8 +135,8 @@ class MainActivity : ComponentActivity() {
                                     // C5: Explicitly select SIM 1 before query
                                     val simSet1Parsed = JsonStateParser.parseResponse(daemonManager.simSet(1))
                                     if (!simSet1Parsed.ok) {
-                                        initErrorTitle = "Initialization Failed"
-                                        initError = "Failed to select SIM 1: ${simSet1Parsed.error?.message ?: "unknown"}"
+                                        initErrorTitle = "初始化失败"
+                                        initError = "选择 SIM 1 失败：${simSet1Parsed.error?.localizedMessage ?: "未知错误"}"
                                         return@withContext
                                     }
 
@@ -144,8 +144,8 @@ class MainActivity : ComponentActivity() {
                                     val sim1Resp = daemonManager.query()
                                     val sim1Parsed = JsonStateParser.parseResponse(sim1Resp)
                                     if (!sim1Parsed.ok) {
-                                        initErrorTitle = "Initialization Failed"
-                                        initError = "Failed to query SIM 1: ${sim1Parsed.error?.message ?: "unknown"}"
+                                        initErrorTitle = "初始化失败"
+                                        initError = "读取 SIM 1 状态失败：${sim1Parsed.error?.localizedMessage ?: "未知错误"}"
                                         return@withContext
                                     }
                                     val sim1State = sim1Parsed.simState ?: SimState()
@@ -171,8 +171,8 @@ class MainActivity : ComponentActivity() {
                                     val sim2Resp = daemonManager.simSet(2)
                                     val sim2Parsed = JsonStateParser.parseResponse(sim2Resp)
                                     if (!sim2Parsed.ok) {
-                                        initErrorTitle = "Initialization Failed"
-                                        initError = "Failed to select SIM 2: ${sim2Parsed.error?.message ?: "unknown"}"
+                                        initErrorTitle = "初始化失败"
+                                        initError = "选择 SIM 2 失败：${sim2Parsed.error?.localizedMessage ?: "未知错误"}"
                                         return@withContext
                                     }
                                     val sim2State = sim2Parsed.simState ?: SimState()
@@ -197,8 +197,8 @@ class MainActivity : ComponentActivity() {
                                     AppLog.i(TAG, "Init: success")
                                 } catch (e: Exception) {
                                     AppLog.e(TAG, "Init: failed", e)
-                                    initErrorTitle = "Initialization Failed"
-                                    initError = "Failed to query modem state: ${e.message}"
+                                    initErrorTitle = "初始化失败"
+                                    initError = "读取基带状态失败：${e.message}"
                                 }
                             }
                             // C4: Back on Main dispatcher - update Compose state
@@ -209,7 +209,7 @@ class MainActivity : ComponentActivity() {
                                 nrIndependentSupported = initNrIndependentSupported
                             }
                             if (initError != null) {
-                                errorTitle = initErrorTitle ?: "Initialization Failed"
+                                errorTitle = initErrorTitle ?: "初始化失败"
                                 errorMessage = initError
                                 showErrorDialog = true
                             }
@@ -265,21 +265,21 @@ class MainActivity : ComponentActivity() {
                                     try {
                                         val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         if (!simResp.ok) {
-                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            errorMsg = simResp.error?.localizedMessage ?: "选择 SIM $sim 失败"
                                             return@withContext
                                         }
 
                                         val resp = when (fieldIndex) {
                                             0 -> {
-                                                if (parts.size < 2) { errorMsg = "Need: arfcn scs_khz"; return@withContext }
+                                                if (parts.size < 2) { errorMsg = "需要：arfcn scs_khz"; return@withContext }
                                                 JsonStateParser.parseResponse(daemonManager.nrCellLockArfcnSet(parts[0].toInt(), parts[1].toInt()))
                                             }
                                             1 -> {
-                                                if (parts.size < 4) { errorMsg = "Need: arfcn pci scs_khz band"; return@withContext }
+                                                if (parts.size < 4) { errorMsg = "需要：arfcn pci scs_khz band"; return@withContext }
                                                 JsonStateParser.parseResponse(daemonManager.nrCellLockPciSet(parts[0].toInt(), parts[1].toInt(), parts[2].toInt(), parts[3].toInt()))
                                             }
                                             2 -> {
-                                                if (parts.size < 4) { errorMsg = "Need: arfcn scs_khz band pci..."; return@withContext }
+                                                if (parts.size < 4) { errorMsg = "需要：arfcn scs_khz band pci..."; return@withContext }
                                                 val arfcn = parts[0].toInt()
                                                 val scs = parts[1].toInt()
                                                 val band = parts[2].toInt()
@@ -287,30 +287,30 @@ class MainActivity : ComponentActivity() {
                                                 JsonStateParser.parseResponse(daemonManager.nrCellLockMultiPciSet(arfcn, scs, band, pciList))
                                             }
                                             3 -> {
-                                                if (parts.size < 2) { errorMsg = "Need: id_bits gnb..."; return@withContext }
+                                                if (parts.size < 2) { errorMsg = "需要：id_bits gnb..."; return@withContext }
                                                 val idBits = parts[0].toInt()
                                                 val gnbIds = parts.drop(1).map { it.toInt() }
                                                 JsonStateParser.parseResponse(daemonManager.nrCellLockGnbSet(idBits, gnbIds))
                                             }
                                             4 -> {
-                                                if (parts.size < 2) { errorMsg = "Need: earfcn pci"; return@withContext }
+                                                if (parts.size < 2) { errorMsg = "需要：earfcn pci"; return@withContext }
                                                 JsonStateParser.parseResponse(daemonManager.lteCellLockSet(parts[0].toInt(), parts[1].toInt()))
                                             }
                                             5 -> {
-                                                if (parts.size != 2) { errorMsg = "Need: mcc mnc"; return@withContext }
+                                                if (parts.size != 2) { errorMsg = "需要：mcc mnc"; return@withContext }
                                                 val mcc = parts[0].toIntOrNull()
                                                 val mnc = parts[1].toIntOrNull()
                                                 if (mcc == null || mcc < 0 || mcc > 999 || mnc == null || mnc < 0 || mnc > 999) {
-                                                    errorMsg = "MCC and MNC must be 0-999"; return@withContext
+                                                    errorMsg = "MCC 和 MNC 必须为 0-999"; return@withContext
                                                 }
                                                 JsonStateParser.parseResponse(daemonManager.plmnLockSet(mcc, mnc))
                                             }
-                                            else -> { errorMsg = "Unknown field"; return@withContext }
+                                            else -> { errorMsg = "未知字段"; return@withContext }
                                         }
 
                                         success = resp.ok
                                         if (!resp.ok) {
-                                            errorMsg = resp.error?.message ?: "Rejected by modem"
+                                            errorMsg = resp.error?.localizedMessage ?: "基带拒绝了请求"
                                         }
                                         if (fieldIndex == 5) {
                                             newPlmnLock = resp.plmnLockState
@@ -318,13 +318,13 @@ class MainActivity : ComponentActivity() {
                                             newCellLock = resp.cellLockState
                                         }
                                     } catch (e: Exception) {
-                                        errorMsg = "Apply failed: ${e.message}"
+                                        errorMsg = "应用失败：${e.message}"
                                         AppLog.e(TAG, "CellLock apply: error", e)
                                     }
                                 }
 
                                 val typeName = when (fieldIndex) {
-                                    0 -> "NR-ARFCN"; 1 -> "PCI"; 2 -> "MultiPCI"; 3 -> "gNB"; 4 -> "LTE PCI"; 5 -> "PLMN"; else -> "Unknown"
+                                    0 -> "NR-ARFCN"; 1 -> "PCI"; 2 -> "多 PCI"; 3 -> "gNB"; 4 -> "LTE PCI"; 5 -> "PLMN"; else -> "未知"
                                 }
                                 cellLockResult = CellLockResult(sim, fieldIndex, typeName, success, errorMsg)
 
@@ -355,7 +355,7 @@ class MainActivity : ComponentActivity() {
                                     try {
                                         val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         if (!simResp.ok) {
-                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            errorMsg = simResp.error?.localizedMessage ?: "选择 SIM $sim 失败"
                                             return@withContext
                                         }
                                         // NR clear: only when the device has NR hardware. The modem
@@ -370,10 +370,10 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                         val lteResp = JsonStateParser.parseResponse(daemonManager.lteCellLockClear())
-                                        if (!lteResp.ok) errorMsg = lteResp.error?.message
+                                        if (!lteResp.ok) errorMsg = lteResp.error?.localizedMessage
                                         newCellLock = lteResp.cellLockState
                                     } catch (e: Exception) {
-                                        errorMsg = "Clear all failed: ${e.message}"
+                                        errorMsg = "清除全部失败：${e.message}"
                                         AppLog.e(TAG, "CellLock clear all: error", e)
                                     }
                                 }
@@ -385,7 +385,7 @@ class MainActivity : ComponentActivity() {
                                         modemState?.copy(sim2CellLock = newCellLock!!)
                                 }
                                 snackbarIsError = errorMsg != null
-                                snackbarMessage = errorMsg ?: "Cleared all cell locks for SIM $sim"
+                                snackbarMessage = errorMsg ?: "已清除 SIM $sim 的全部小区锁定"
                             }
                         }
                     },
@@ -399,7 +399,7 @@ class MainActivity : ComponentActivity() {
                                     try {
                                         val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         if (!simResp.ok) {
-                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            errorMsg = simResp.error?.localizedMessage ?: "选择 SIM $sim 失败"
                                             return@withContext
                                         }
                                         try {
@@ -425,8 +425,8 @@ class MainActivity : ComponentActivity() {
                                 snackbarIsError = errorMsg != null || ioError
                                 snackbarMessage = when {
                                     errorMsg != null -> errorMsg
-                                    ioError -> "Clear 5G failed (connection error)"
-                                    else -> "Cleared 5G cell lock for SIM $sim"
+                                    ioError -> "清除 5G 失败（连接错误）"
+                                    else -> "已清除 SIM $sim 的 5G 小区锁定"
                                 }
                             }
                         }
@@ -440,14 +440,14 @@ class MainActivity : ComponentActivity() {
                                     try {
                                         val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         if (!simResp.ok) {
-                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            errorMsg = simResp.error?.localizedMessage ?: "选择 SIM $sim 失败"
                                             return@withContext
                                         }
                                         val resp = JsonStateParser.parseResponse(daemonManager.lteCellLockClear())
-                                        if (!resp.ok) errorMsg = resp.error?.message
+                                        if (!resp.ok) errorMsg = resp.error?.localizedMessage
                                         newCellLock = resp.cellLockState
                                     } catch (e: Exception) {
-                                        errorMsg = "Clear 4G failed: ${e.message}"
+                                        errorMsg = "清除 4G 失败：${e.message}"
                                         AppLog.e(TAG, "CellLock clear 4G: error", e)
                                     }
                                 }
@@ -459,7 +459,7 @@ class MainActivity : ComponentActivity() {
                                         modemState?.copy(sim2CellLock = newCellLock!!)
                                 }
                                 snackbarIsError = errorMsg != null
-                                snackbarMessage = errorMsg ?: "Cleared 4G cell lock for SIM $sim"
+                                snackbarMessage = errorMsg ?: "已清除 SIM $sim 的 4G 小区锁定"
                             }
                         }
                     },
@@ -472,16 +472,16 @@ class MainActivity : ComponentActivity() {
                                     try {
                                         val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         if (!simResp.ok) {
-                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            errorMsg = simResp.error?.localizedMessage ?: "选择 SIM $sim 失败"
                                             return@withContext
                                         }
                                         val resp = JsonStateParser.parseResponse(daemonManager.plmnLockClear())
-                                        if (!resp.ok) errorMsg = resp.error?.message
+                                        if (!resp.ok) errorMsg = resp.error?.localizedMessage
                                         delay(200)
                                         val resp2 = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         newPlmnLock = resp2.plmnLockState ?: resp.plmnLockState
                                     } catch (e: Exception) {
-                                        errorMsg = "Clear PLMN failed: ${e.message}"
+                                        errorMsg = "清除 PLMN 失败：${e.message}"
                                         AppLog.e(TAG, "CellLock clear PLMN: error", e)
                                     }
                                 }
@@ -493,7 +493,7 @@ class MainActivity : ComponentActivity() {
                                         modemState?.copy(sim2PlmnLock = newPlmnLock!!)
                                 }
                                 snackbarIsError = errorMsg != null
-                                snackbarMessage = errorMsg ?: "Cleared PLMN lock for SIM $sim"
+                                snackbarMessage = errorMsg ?: "已清除 SIM $sim 的 PLMN 锁定"
                             }
                         }
                     },
@@ -518,10 +518,10 @@ class MainActivity : ComponentActivity() {
                                             newCellLock = resp.cellLockState
                                             newPlmnLock = resp.plmnLockState
                                         } else {
-                                            errorMsg = resp.error?.message ?: "Refresh failed"
+                                            errorMsg = resp.error?.localizedMessage ?: "刷新失败"
                                         }
                                     } catch (e: Exception) {
-                                        errorMsg = "Refresh failed: ${e.message}"
+                                        errorMsg = "刷新失败：${e.message}"
                                         AppLog.e(TAG, "CellLock refresh: error", e)
                                     }
                                 }
@@ -568,7 +568,7 @@ class MainActivity : ComponentActivity() {
                                         val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         // C2: If simSet fails, abort early
                                         if (!simResp.ok) {
-                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            errorMsg = simResp.error?.localizedMessage ?: "选择 SIM $sim 失败"
                                             return@withContext
                                         }
 
@@ -605,7 +605,7 @@ class MainActivity : ComponentActivity() {
                                         val queryResp = JsonStateParser.parseResponse(daemonManager.query())
                                         newState = queryResp.simState ?: lastResp.simState
                                     } catch (e: Exception) {
-                                        errorMsg = "Apply failed: ${e.message}"
+                                        errorMsg = "应用失败：${e.message}"
                                         AppLog.e(TAG, "Apply SIM $sim: error", e)
                                     }
                                 }
@@ -624,11 +624,11 @@ class MainActivity : ComponentActivity() {
                                 snackbarIsError = errorMsg != null || firstError != null
                                 snackbarMessage = if (errorMsg != null) errorMsg
                                     else if (firstError != null) {
-                                        val msg = firstError.message
+                                        val msg = firstError.localizedMessage
                                         val rejected = firstError.rejectedBands
                                         if (rejected != null && rejected.isNotEmpty())
                                             "$msg (rejected: $rejected)" else msg
-                                    } else "Settings applied for SIM $sim"
+                                    } else "SIM $sim 设置已应用"
                                 if (errorMsg == null && firstError == null) {
                                     AppLog.i(TAG, "Apply SIM $sim: success")
                                 }
@@ -647,7 +647,7 @@ class MainActivity : ComponentActivity() {
                                     try {
                                         val simResp = JsonStateParser.parseResponse(daemonManager.simSet(sim))
                                         if (!simResp.ok) {
-                                            errorMsg = simResp.error?.message ?: "Failed to select SIM $sim"
+                                            errorMsg = simResp.error?.localizedMessage ?: "选择 SIM $sim 失败"
                                             return@withContext
                                         }
 
@@ -658,7 +658,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                         newState = parsed.simState
                                     } catch (e: Exception) {
-                                        errorMsg = "Reset failed: ${e.message}"
+                                        errorMsg = "重置失败：${e.message}"
                                         AppLog.e(TAG, "Reset SIM $sim: error", e)
                                     }
                                 }
@@ -672,8 +672,8 @@ class MainActivity : ComponentActivity() {
                                 if (slot == 0) refreshKey0++ else refreshKey1++
                                 snackbarIsError = errorMsg != null || firstError != null
                                 snackbarMessage = if (errorMsg != null) errorMsg
-                                    else if (firstError != null) firstError.message
-                                    else "Reset to hardware defaults for SIM $sim"
+                                    else if (firstError != null) firstError.localizedMessage
+                                    else "SIM $sim 已重置为硬件默认值"
                                 if (errorMsg == null && firstError == null) {
                                     AppLog.i(TAG, "Reset SIM $sim: success")
                                 }
@@ -701,13 +701,13 @@ class MainActivity : ComponentActivity() {
                                                 parsed = JsonStateParser.parseResponse(resp)
                                             }
                                             if (!parsed.ok) {
-                                                errorMsg = parsed.error?.message ?: "Refresh failed"
+                                                errorMsg = parsed.error?.localizedMessage ?: "刷新失败"
                                                 return@withContext
                                             }
                                             newState = parsed.simState
                                             success = true
                                         } catch (e: Exception) {
-                                            errorMsg = "Refresh failed: ${e.message}"
+                                            errorMsg = "刷新失败：${e.message}"
                                             AppLog.e(TAG, "Refresh SIM $sim: error", e)
                                         }
                                     }
@@ -721,7 +721,7 @@ class MainActivity : ComponentActivity() {
                                         AppLog.i(TAG, "Refresh SIM $sim: success")
                                     } else {
                                         snackbarIsError = true
-                                        snackbarMessage = errorMsg ?: "Refresh failed"
+                                        snackbarMessage = errorMsg ?: "刷新失败"
                                         AppLog.i(TAG, "Refresh SIM $sim: failed")
                                     }
                                 }

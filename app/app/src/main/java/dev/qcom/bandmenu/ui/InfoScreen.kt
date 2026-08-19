@@ -56,29 +56,29 @@ fun InfoScreen(
         ) {
             Spacer(modifier = Modifier.height(24.dp))
 
-            SmallTitle("About")
+            SmallTitle("关于")
             Text(
-                "Qualcomm Band Menu",
+                "高通频段管理",
                 style = MiuixTheme.textStyles.title2,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "Version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                "版本：${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）",
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "Package: ${BuildConfig.APPLICATION_ID}",
+                "包名：${BuildConfig.APPLICATION_ID}",
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            SmallTitle("Credits")
+            SmallTitle("致谢")
             Text(
                 "@pasapong",
                 style = MiuixTheme.textStyles.title2,
@@ -88,9 +88,9 @@ fun InfoScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            SmallTitle("Powered by")
+            SmallTitle("技术支持")
             Text(
-                "miuix UI framework\nlibsu\nAndroidLiquidGlass",
+                "miuix UI 框架\nlibsu\nAndroidLiquidGlass",
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -102,7 +102,7 @@ fun InfoScreen(
             entry = DropdownEntry(
                 items = listOf(
                     DropdownItem(
-                        text = "Debug logging",
+                        text = "调试日志",
                         selected = debugEnabled,
                         onClick = { onDebugToggle() }
                     )
@@ -112,7 +112,7 @@ fun InfoScreen(
         ) {
             Icon(
                 imageVector = MiuixIcons.More,
-                contentDescription = "Menu",
+                contentDescription = "菜单",
                 tint = MiuixTheme.colorScheme.onBackground
             )
         }
