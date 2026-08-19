@@ -48,7 +48,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK platform
-        run: sdkmanager "platforms;android-37"
+        run: sdkmanager "platforms;android-37.0"
 
       - name: Reapply Chinese UI translation
         run: python3 scripts/apply_zh_translation.py
