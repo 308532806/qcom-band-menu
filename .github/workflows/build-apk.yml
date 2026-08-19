@@ -36,6 +36,9 @@ jobs:
           path: AndroidLiquidGlass
           fetch-depth: 1
 
+      - name: Align composite build plugin versions
+        run: sed -i -E 's/^agp = ".*"$/agp = "9.3.1"/' AndroidLiquidGlass/gradle/libs.versions.toml
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
