@@ -21,7 +21,11 @@ plugins {
 }
 
 includeBuild("../miuix")
-includeBuild("../AndroidLiquidGlass")
+includeBuild("../AndroidLiquidGlass") {
+    dependencySubstitution {
+        substitute(module("io.github.kyant0:backdrop")).using(project(":backdrop"))
+    }
+}
 
 rootProject.name = "QcomBandMenu"
 include(":app")
